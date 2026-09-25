@@ -31,6 +31,7 @@ export default function Lobby({ onEnter }: LobbyProps) {
   const [checkingRoom,  setCheckingRoom]  = useState(false);
 
   const [appVersion,    setAppVersion]    = useState("");
+  const [isUpdating,    setIsUpdating]    = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("ss_display_name");
@@ -48,6 +49,12 @@ export default function Lobby({ onEnter }: LobbyProps) {
             // checkRoom(match[1]); não precisa chamar direto pq o useEffect já lida se quiser, ou chamamos
           }
         });
+      }
+      if (window.electronAPI.onUpdateAvailable) {
+        window.electronAPI.onUpdateAvailable(() => setIsUpdating(true));
+      }
+      if (window.electronAPI.onUpdateError) {
+        window.electronAPI.onUpdateError(() => setIsUpdating(false));
       }
     }
   }, []);
@@ -329,7 +336,7 @@ export default function Lobby({ onEnter }: LobbyProps) {
               <button
                 className="btn btn-primary btn-lg lobby-cta"
                 onClick={handleCreate}
-                disabled={loading || !displayName.trim()}
+                disabled={loading || !displayName.trim() || isUpdating}
               >
                 {loading ? <><span className="spinner" /> Criando...</> : <><MonitorIcon size={17} /> Criar e Entrar</>}
               </button>
@@ -337,7 +344,7 @@ export default function Lobby({ onEnter }: LobbyProps) {
               <button
                 className="btn btn-primary btn-lg lobby-cta"
                 onClick={handleJoin}
-                disabled={loading || !displayName.trim() || checkingRoom}
+                disabled={loading || !displayName.trim() || checkingRoom || isUpdating}
               >
                 {loading ? <><span className="spinner" /> Entrando...</> : <><EnterIcon size={17} /> Entrar na Sala</>}
               </button>

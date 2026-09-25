@@ -498,6 +498,7 @@ const roomStyles = `
     height: 100%; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 16px; color: var(--color-text-secondary); font-size: 0.9rem;
+  }
   .room-layout {
     display: flex; flex-direction: column;
     height: 100%;
