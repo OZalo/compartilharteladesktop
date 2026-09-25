@@ -26,4 +26,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onUpdateDownloaded: (cb: () => void) =>
     ipcRenderer.on("update-downloaded", () => cb()),
   installUpdate: () => ipcRenderer.send("install-update"),
+
+  // Deep linking
+  onDeepLink: (cb: (url: string) => void) => {
+    ipcRenderer.removeAllListeners("deep-link");
+    ipcRenderer.on("deep-link", (_e, url) => cb(url));
+  },
 });

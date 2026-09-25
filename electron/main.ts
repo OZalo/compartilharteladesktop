@@ -64,9 +64,44 @@ ipcMain.on("open-external", (_, url: string) => {
 // ─── IPC: obter versão ────────────────────────────────────────────────────────
 ipcMain.handle("get-version", () => app.getVersion());
 
+// ─── Deep Linking e Single Instance ─────────────────────────────────────────────
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient("compartilhartela", process.execPath, [path.resolve(process.argv[1])]);
+  }
+} else {
+  app.setAsDefaultProtocolClient("compartilhartela");
+}
+
+let mainWindow: BrowserWindow | null = null;
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (event, commandLine, workingDirectory) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+    const url = commandLine.find((arg) => arg.startsWith("compartilhartela://"));
+    if (url && mainWindow) {
+      mainWindow.webContents.send("deep-link", url);
+    }
+  });
+}
+
+// macOS open-url
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (mainWindow && url.startsWith("compartilhartela://")) {
+    mainWindow.webContents.send("deep-link", url);
+  }
+});
+
 // ─── Criar janela ─────────────────────────────────────────────────────────────
 async function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1100,
     height: 700,
     minWidth: 800,
@@ -119,6 +154,14 @@ async function createWindow() {
   win.once("ready-to-show", () => {
     // win.show();
     setupUpdater(win);
+    // Checar se abriu com um link direto no Windows
+    if (process.platform === "win32") {
+      const url = process.argv.find((arg) => arg.startsWith("compartilhartela://"));
+      if (url) {
+        // Envia com um pequeno delay para garantir que o React carregou
+        setTimeout(() => win.webContents.send("deep-link", url), 1500);
+      }
+    }
   });
 
   // Impede que links externos abram no app
@@ -136,12 +179,14 @@ async function createWindow() {
 }
 
 app.disableHardwareAcceleration();
-app.whenReady().then(createWindow);
+if (gotTheLock) {
+  app.whenReady().then(createWindow);
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}

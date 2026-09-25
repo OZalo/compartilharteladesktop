@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -58,7 +58,15 @@
       "provider": "github",
       "owner": "OZalo",
       "repo": "compartilharteladesktop"
-    }
+    },
+    "protocols": [
+      {
+        "name": "CompartilharTela",
+        "schemes": [
+          "compartilhartela"
+        ]
+      }
+    ]
   },
   "allowScripts": {
     "electron@36.9.5": true

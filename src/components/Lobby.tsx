@@ -36,9 +36,19 @@ export default function Lobby({ onEnter }: LobbyProps) {
     const saved = localStorage.getItem("ss_display_name");
     if (saved) setDisplayName(saved);
     setNewRoomName(generateRoomName());
-    // Versão do app
+    // Versão do app e Deep Linking
     if (window.electronAPI) {
       window.electronAPI.getVersion().then(setAppVersion);
+      if (window.electronAPI.onDeepLink) {
+        window.electronAPI.onDeepLink((url) => {
+          const match = url.match(/room\/([^\/\?]+)/);
+          if (match && match[1]) {
+            setTab("join");
+            setJoinRoomName(match[1]);
+            // checkRoom(match[1]); não precisa chamar direto pq o useEffect já lida se quiser, ou chamamos
+          }
+        });
+      }
     }
   }, []);
 
@@ -389,7 +399,7 @@ function ChevronIcon(p: React.SVGProps<SVGSVGElement>) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const lobbyStyles = `
   .lobby-page {
-    height: 100vh; display: flex; align-items: center; justify-content: center;
+    height: 100%; display: flex; align-items: center; justify-content: center;
     padding: 24px; position: relative; overflow-y: auto;
   }
   .lobby-wrap {
