@@ -297,13 +297,41 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
                 <div className="screen-label">
                   <MonitorIcon size={11} />
                   {trackRef.participant.name || trackRef.participant.identity}
+                  <button 
+                    onClick={(e) => {
+                      const videoEl = (e.currentTarget.closest('.screen-wrap') as HTMLElement)?.querySelector('video');
+                      if (videoEl) {
+                        if (document.pictureInPictureElement) document.exitPictureInPicture();
+                        else videoEl.requestPictureInPicture().catch(console.error);
+                      }
+                    }}
+                    style={{ marginLeft: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
+                    title="Tela Flutuante (PiP)"
+                  >
+                    <PiPIcon /> PiP
+                  </button>
                 </div>
               </div>
             ))
           ) : isSharing && localScreenTrack ? (
             <div className="screen-wrap">
               <VideoTrack trackRef={localScreenTrack as any} className="screen-video" />
-              <div className="screen-label"><MonitorIcon size={11} /> Sua tela (prévia)</div>
+              <div className="screen-label">
+                <MonitorIcon size={11} /> Sua tela (prévia)
+                <button 
+                  onClick={(e) => {
+                    const videoEl = (e.currentTarget.closest('.screen-wrap') as HTMLElement)?.querySelector('video');
+                    if (videoEl) {
+                      if (document.pictureInPictureElement) document.exitPictureInPicture();
+                      else videoEl.requestPictureInPicture().catch(console.error);
+                    }
+                  }}
+                  style={{ marginLeft: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  title="Tela Flutuante (PiP)"
+                >
+                  <PiPIcon /> PiP
+                </button>
+              </div>
             </div>
           ) : (
             <div className="room-empty">
@@ -491,6 +519,9 @@ function AlertIcon() {
 function FullscreenIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>;
 }
+function PiPIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><rect x="12" y="14" width="7" height="5" rx="1" ry="1"/></svg>;
+}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const roomStyles = `
@@ -501,7 +532,7 @@ const roomStyles = `
   }
   .room-layout {
     display: flex; flex-direction: column;
-    height: 100%;
+    flex: 1; min-height: 0; width: 100%;
     background: var(--color-bg-base);
     overflow: hidden;
   }
