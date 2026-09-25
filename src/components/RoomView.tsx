@@ -102,8 +102,9 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 // Inner — tem acesso ao contexto LiveKit
 // ─────────────────────────────────────────────────────────────────────────────
 function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => void }) {
-  const { localParticipant } = useLocalParticipant();
+  const { localParticipant, isCameraEnabled } = useLocalParticipant();
   const participants         = useParticipants();
+  const cameraTracks         = useTracks([Track.Source.Camera]);
 
   const [isSharing,        setIsSharing]        = useState(false);
   const [quality,          setQuality]          = useState<Quality>("1080p60");
@@ -227,6 +228,14 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
     setShareError("");
   }, [localParticipant]);
 
+  const toggleCamera = useCallback(async () => {
+    try {
+      await localParticipant.setCameraEnabled(!isCameraEnabled);
+    } catch (e) {
+      console.error("Camera error:", e);
+    }
+  }, [localParticipant, isCameraEnabled]);
+
   // URL para os amigos assistirem no navegador
   const viewerUrl = `${API_URL}?sala=${encodeURIComponent(roomName)}`;
 
@@ -345,6 +354,18 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
               </p>
             </div>
           )}
+
+          {/* Webcams */}
+          {cameraTracks.length > 0 && (
+            <div className="cameras-container">
+              {cameraTracks.map(trackRef => (
+                <div key={trackRef.publication?.trackSid} className="camera-wrap animate-scale-in">
+                  <VideoTrack trackRef={trackRef as any} className="camera-video" />
+                  <div className="camera-label">{trackRef.participant.name || trackRef.participant.identity}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Áudio remoto */}
@@ -418,6 +439,15 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
             <MonitorIcon size={17} /> Compartilhar Tela
           </button>
         )}
+
+        <button
+          className={`btn ${isCameraEnabled ? "btn-secondary" : "btn-ghost"} btn-icon`}
+          onClick={toggleCamera}
+          title={isCameraEnabled ? "Desativar Câmera" : "Ativar Câmera"}
+          style={!isCameraEnabled ? { color: "var(--color-danger)" } : {}}
+        >
+          {isCameraEnabled ? <CameraIcon size={18} /> : <CameraOffIcon size={18} />}
+        </button>
 
         <button
           className="btn btn-secondary btn-icon"
@@ -522,6 +552,12 @@ function FullscreenIcon() {
 function PiPIcon() {
   return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><rect x="12" y="14" width="7" height="5" rx="1" ry="1"/></svg>;
 }
+function CameraIcon({ size = 15 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>;
+}
+function CameraOffIcon({ size = 15 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M2 2l20 20M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>;
+}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const roomStyles = `
@@ -532,7 +568,7 @@ const roomStyles = `
   }
   .room-layout {
     display: flex; flex-direction: column;
-    flex: 1; min-height: 0; width: 100%;
+    height: 100%;
     background: var(--color-bg-base);
     overflow: hidden;
   }
@@ -674,4 +710,22 @@ const roomStyles = `
   .quality-option--active { color: var(--color-accent); }
   .volume-wrap { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--color-text-secondary); }
   .volume-slider { width: 80px; cursor: pointer; accent-color: var(--color-accent); }
+  
+  .cameras-container {
+    position: absolute; top: 16px; right: 16px;
+    display: flex; flex-direction: column; gap: 10px; z-index: 50;
+  }
+  .camera-wrap {
+    width: 220px; aspect-ratio: 16/9; background: var(--color-bg-elevated);
+    border-radius: var(--radius-md); overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6); border: 1px solid var(--color-border);
+    position: relative;
+  }
+  .camera-video { width: 100% !important; height: 100% !important; object-fit: cover; transform: scaleX(-1); }
+  .camera-label {
+    position: absolute; bottom: 6px; left: 6px;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    color: #fff; font-size: 0.72rem; font-weight: 500; padding: 3px 8px;
+    border-radius: var(--radius-full);
+  }
 `;
