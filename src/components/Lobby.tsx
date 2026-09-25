@@ -40,7 +40,7 @@ export default function Lobby({ onEnter }: LobbyProps) {
     if (window.electronAPI) {
       window.electronAPI.getVersion().then(setAppVersion);
       if (window.electronAPI.onDeepLink) {
-        window.electronAPI.onDeepLink((url) => {
+        window.electronAPI.onDeepLink((url: string) => {
           const match = url.match(/room\/([^\/\?]+)/);
           if (match && match[1]) {
             setTab("join");
