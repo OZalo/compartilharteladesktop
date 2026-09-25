@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -54,6 +54,12 @@
     "win": {
       "target": "nsis",
       "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "Compartilhar Tela"
     },
     "publish": {
       "provider": "github",

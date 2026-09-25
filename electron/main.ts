@@ -54,7 +54,7 @@ ipcMain.handle("get-desktop-sources", async () => {
 
 // ─── IPC: instalar update ─────────────────────────────────────────────────────
 ipcMain.on("install-update", () => {
-  autoUpdater.quitAndInstall();
+  autoUpdater.quitAndInstall(true, true);
 });
 
 // ─── IPC: abrir link externo ──────────────────────────────────────────────────
