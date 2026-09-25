@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("update-progress", (_e, percent) => cb(percent)),
   onUpdateDownloaded: (cb: () => void) =>
     ipcRenderer.on("update-downloaded", () => cb()),
+  onUpdateError: (cb: (error: string) => void) =>
+    ipcRenderer.on("update-error", (_e, error) => cb(error)),
   installUpdate: () => ipcRenderer.send("install-update"),
 
   // Deep linking

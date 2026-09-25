@@ -6,19 +6,30 @@ export default function UpdateBanner() {
   const [newVersion, setNewVersion] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [ready, setReady] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!window.electronAPI) return;
-    window.electronAPI.onUpdateAvailable((v) => setNewVersion(v));
+    window.electronAPI.onUpdateAvailable((v) => { setNewVersion(v); setErrorMsg(null); });
     window.electronAPI.onUpdateProgress((p) => setProgress(p));
     window.electronAPI.onUpdateDownloaded(() => { setProgress(null); setReady(true); });
+    if (window.electronAPI.onUpdateError) {
+      window.electronAPI.onUpdateError((err) => {
+        setErrorMsg("Erro ao baixar. Baixe manualmente no GitHub.");
+        console.error(err);
+      });
+    }
   }, []);
 
   if (!newVersion) return null;
 
   return (
     <div className="update-banner">
-      {ready ? (
+      {errorMsg ? (
+        <div className="update-banner-text" style={{ color: "var(--color-danger)" }}>
+          {errorMsg}
+        </div>
+      ) : ready ? (
         <>
           <div className="update-banner-text">
             <strong>v{newVersion}</strong> pronta para instalar!

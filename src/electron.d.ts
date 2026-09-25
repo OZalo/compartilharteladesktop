@@ -14,6 +14,7 @@ export interface ElectronAPI {
   onUpdateAvailable: (cb: (version: string) => void) => void;
   onUpdateProgress: (cb: (percent: number) => void) => void;
   onUpdateDownloaded: (cb: () => void) => void;
+  onUpdateError?: (cb: (err: string) => void) => void;
   installUpdate: () => void;
   onDeepLink?: (cb: (url: string) => void) => void;
 }

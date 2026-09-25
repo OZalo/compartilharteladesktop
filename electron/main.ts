@@ -27,6 +27,7 @@ function setupUpdater(win: BrowserWindow) {
   });
   autoUpdater.on("error", (err) => {
     console.error("[updater]", err.message);
+    win.webContents.send("update-error", err.message);
   });
 
   if (!isDev) {

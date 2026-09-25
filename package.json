@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -42,6 +42,7 @@
   "build": {
     "appId": "com.ozalo.compartilhartela",
     "productName": "Compartilhar Tela",
+    "artifactName": "CompartilharTela-Setup-${version}.${ext}",
     "copyright": "Copyright © 2026 Zalo",
     "directories": {
       "output": "release"
