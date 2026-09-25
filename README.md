@@ -1,62 +1,41 @@
-# Compartilhar Tela Desktop 🖥️
+# Compartilhar Tela Desktop
 
-Um aplicativo desktop focado em performance para **compartilhamento de tela e áudio do sistema**, construído com Electron, React, Vite e LiveKit.
+Aplicativo desktop leve para compartilhar a tela e o áudio do sistema, feito com Electron, React, Vite e LiveKit.
 
 ![Badge Versão](https://img.shields.io/badge/vers%C3%A3o-1.0.0-00d4b8?style=flat-square) ![Badge Electron](https://img.shields.io/badge/Electron-36.9.5-313244?style=flat-square&logo=electron) ![Badge React](https://img.shields.io/badge/React-18.3.1-313244?style=flat-square&logo=react)
 
-## ✨ Características Principais
+## O que ele faz
+- Compartilha a tela inteira ou uma janela específica em alta qualidade (até 1080p 60fps).
+- Captura o áudio nativo do sistema do PC junto com a tela.
+- Cria salas temporárias seguras com senha.
+- Se atualiza sozinho quando uma versão nova sai aqui no GitHub.
 
-- 🎥 **Compartilhamento de Alta Qualidade:** Transmita sua tela inteira ou janelas específicas (suporta até 1080p a 60fps).
-- 🔊 **Áudio do Sistema Nativo:** Ao contrário dos navegadores comuns, o app desktop captura o som do seu PC/Jogos perfeitamente sincronizado, graças ao `desktopCapturer` do Electron.
-- 🔒 **Salas Seguras:** Crie salas temporárias e proteja-as com senha.
-- 🔄 **Atualizações Automáticas (Auto-Updater):** O app detecta novas versões publicadas aqui no GitHub, baixa silenciosamente e avisa quando estiver pronto para atualizar.
+## Tecnologias
+React, TypeScript, CSS puro, Electron e LiveKit.
 
----
+## Como rodar o projeto
 
-## 🛠️ Tecnologias Utilizadas
+Este app é o front-end desktop e precisa se comunicar com uma API web para gerar as credenciais do LiveKit.
 
-- **Interface:** React + TypeScript + Vanilla CSS (Design System próprio estilo Glassmorphism).
-- **Empacotamento Desktop:** Electron (com `electron-builder` e `electron-updater`).
-- **Comunicação WebRTC:** Infraestrutura do [LiveKit](https://livekit.io/).
-- **Bundler:** Vite (modo de desenvolvimento ultrarrápido rodando simultaneamente com o Electron principal).
-
----
-
-## 🚀 Como Executar e Contribuir
-
-*Atenção: Este aplicativo atua como o cliente (frontend). Para geração de tokens e backend, ele se comunica com a nossa API Web externa.*
-
-### 1. Requisitos
-- Node.js versão 20+
-- Conta no LiveKit Cloud (ou self-hosted)
-
-### 2. Instalação
+1. Clone o repositório e instale tudo:
 ```bash
-git clone https://github.com/OZalo/compartilharteladesktop.git
-cd compartilharteladesktop
 npm install
 ```
 
-### 3. Variáveis de Ambiente
-Crie um arquivo `.env.local` na raiz do projeto e configure suas chaves do LiveKit e URL da sua API principal:
-
+2. Crie um arquivo `.env.local` na raiz:
 ```env
-VITE_LIVEKIT_URL=wss://sua-instancia-do-livekit.livekit.cloud
-VITE_API_URL=https://seu-site-ou-api.vercel.app
+VITE_LIVEKIT_URL=wss://sua-url-do-livekit
+VITE_API_URL=https://sua-api.vercel.app
 ```
-*(Obs: O arquivo `.env.local` é ignorado pelo git para manter suas credenciais seguras).*
 
-### 4. Modo de Desenvolvimento
-Inicia o Vite (Renderer) e o Electron (Main process) ao mesmo tempo:
+3. Rode em ambiente de desenvolvimento (Electron + Vite):
 ```bash
 npm run dev:all
 ```
 
-### 5. Compilando o Executável (.exe)
-Gera uma versão "Portable" na pasta `release/`:
+4. Para compilar o `.exe` final:
 ```bash
 npm run dist:win
 ```
 
----
-**Criado por [Zalo](https://github.com/OZalo)** 🚀
+Criado por [Zalo](https://github.com/OZalo)
