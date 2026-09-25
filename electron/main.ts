@@ -137,7 +137,7 @@ async function createWindow() {
       }));
 
       // Pede para o renderer exibir o seletor
-      win.webContents.send("show-desktop-source-selector", serializableSources);
+      mainWindow!.webContents.send("show-desktop-source-selector", serializableSources);
 
       ipcMain.once("desktop-source-selected", (_event, sourceId) => {
         if (!sourceId) {
@@ -151,30 +151,30 @@ async function createWindow() {
     });
   });
 
-  win.once("ready-to-show", () => {
-    // win.show();
-    setupUpdater(win);
+  mainWindow.once("ready-to-show", () => {
+    // mainWindow.show();
+    setupUpdater(mainWindow!);
     // Checar se abriu com um link direto no Windows
     if (process.platform === "win32") {
       const url = process.argv.find((arg) => arg.startsWith("compartilhartela://"));
       if (url) {
         // Envia com um pequeno delay para garantir que o React carregou
-        setTimeout(() => win.webContents.send("deep-link", url), 1500);
+        setTimeout(() => mainWindow!.webContents.send("deep-link", url), 1500);
       }
     }
   });
 
   // Impede que links externos abram no app
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
   if (isDev) {
-    await win.loadURL("http://localhost:5173");
-    win.webContents.openDevTools();
+    await mainWindow.loadURL("http://localhost:5173");
+    mainWindow.webContents.openDevTools();
   } else {
-    await win.loadFile(path.join(__dirname, "../dist/index.html"));
+    await mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 }
 
