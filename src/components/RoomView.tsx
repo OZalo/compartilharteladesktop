@@ -231,7 +231,8 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
   const viewerUrl = `${API_URL}?sala=${encodeURIComponent(roomName)}`;
 
   const handleCopyLink = async () => {
-    await copyToClipboard(viewerUrl);
+    const textToCopy = `${roomName}\n${viewerUrl}`;
+    await copyToClipboard(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
@@ -390,6 +391,14 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
           </button>
         )}
 
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={toggleFullscreen}
+          title="Tela Cheia"
+        >
+          <FullscreenIcon />
+        </button>
+
         {/* Volume (para ouvir outros participantes) */}
         <div className="volume-wrap">
           <VolumeIcon />
@@ -435,15 +444,6 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
             }}>
               Cancelar
             </button>
-            {roomState !== ConnectionState.Disconnected && (
-              <button
-                className="btn btn-secondary btn-icon"
-                onClick={toggleFullscreen}
-                title="Tela Cheia"
-              >
-                <FullscreenIcon />
-              </button>
-            )}
           </div>
         </div>
       )}

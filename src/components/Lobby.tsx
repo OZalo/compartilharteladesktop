@@ -127,7 +127,9 @@ export default function Lobby({ onEnter }: LobbyProps) {
   const handleCopyLink = async () => {
     const room = sanitizeRoomName(newRoomName);
     if (!room) return;
-    await copyToClipboard(`${API_URL}?sala=${encodeURIComponent(room)}`);
+    const url = `${API_URL}?sala=${encodeURIComponent(room)}`;
+    const textToCopy = `${room}\n${url}`;
+    await copyToClipboard(textToCopy);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
   };
