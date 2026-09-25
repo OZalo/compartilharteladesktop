@@ -140,6 +140,16 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
     return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
   };
 
+  const toggleFullscreen = () => {
+    const el = document.querySelector(".screen-wrap");
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(err => console.error(err));
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
   // Tracks
   const screenVideoTracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
@@ -425,6 +435,15 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
             }}>
               Cancelar
             </button>
+            {roomState !== ConnectionState.Disconnected && (
+              <button
+                className="btn btn-secondary btn-icon"
+                onClick={toggleFullscreen}
+                title="Tela Cheia"
+              >
+                <FullscreenIcon />
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -469,6 +488,9 @@ function VolumeIcon() {
 function AlertIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
 }
+function FullscreenIcon() {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>;
+}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const roomStyles = `
@@ -476,22 +498,18 @@ const roomStyles = `
     height: 100%; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 16px; color: var(--color-text-secondary); font-size: 0.9rem;
-  }
   .room-layout {
     display: flex; flex-direction: column;
-    height: 100%; width: 100%;
-    background: #000;
+    height: 100%;
+    background: var(--color-bg-base);
     overflow: hidden;
-    position: relative;
   }
   .room-topbar {
-    position: absolute; top: 0; left: 0; right: 0;
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px;
-    background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
-    border-bottom: none;
-    flex-shrink: 0; gap: 12px; z-index: 20;
-    transition: opacity 0.3s;
+    background: var(--color-bg-elevated);
+    border-bottom: 1px solid var(--color-border);
+    flex-shrink: 0; gap: 12px; z-index: 10;
   }
   .source-selector-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.8);
@@ -539,17 +557,17 @@ const roomStyles = `
     border-radius: var(--radius-full); padding: 1px 7px;
     font-size: 0.73rem; font-weight: 700; margin-left: 2px;
   }
-  .room-content { flex: 1; display: flex; width: 100%; height: 100%; position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+  .room-content { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden; }
   .room-video-area {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    padding: 0; gap: 0; overflow: hidden;
-    background: #000;
+    padding: 16px; gap: 12px; overflow: hidden;
+    background: var(--color-bg-base);
   }
   .screen-wrap {
     position: relative; width: 100%; height: 100%; max-height: 100%;
-    border-radius: 0; overflow: hidden;
-    background: #000; box-shadow: none;
+    border-radius: var(--radius-lg); overflow: hidden;
+    background: #000; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
   }
   .screen-video { width: 100% !important; height: 100% !important; object-fit: contain; }
   .screen-label {
@@ -573,11 +591,9 @@ const roomStyles = `
   .room-empty-title { font-size: 1.3rem; font-weight: 700; }
   .room-empty-sub { color: var(--color-text-secondary); max-width: 360px; font-size: 0.88rem; line-height: 1.6; }
   .room-sidebar {
-    position: absolute; right: 0; top: 0; bottom: 0; z-index: 15;
-    width: 250px; background: rgba(17, 17, 24, 0.95); backdrop-filter: blur(12px);
-    border-left: 1px solid rgba(255,255,255,0.1);
+    width: 250px; background: var(--color-bg-elevated);
+    border-left: 1px solid var(--color-border);
     display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
-    box-shadow: -8px 0 32px rgba(0,0,0,0.5);
   }
   .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -602,15 +618,12 @@ const roomStyles = `
   }
   .participant-sharing { font-size: 0.72rem; color: var(--color-success); }
   .room-controls {
-    position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
     display: flex; align-items: center; justify-content: center; gap: 10px;
-    padding: 10px 16px; background: rgba(17, 17, 24, 0.85); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-full);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 20;
-    transition: opacity 0.3s, transform 0.3s;
+    padding: 12px 20px; background: var(--color-bg-elevated);
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0; position: relative;
   }
-  .room-layout:hover .room-topbar, .room-layout:hover .room-controls { opacity: 1; }
-  .room-status-right { position: absolute; right: -140px; display: flex; align-items: center; }
+  .room-status-right { position: absolute; right: 20px; display: flex; align-items: center; }
   .online-count { display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--color-text-muted); }
   .quality-wrap { position: relative; }
   .quality-menu {
