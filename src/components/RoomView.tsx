@@ -108,7 +108,17 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
   const [copied,           setCopied]           = useState(false);
   const [volume,           setVolume]           = useState(1);
   const [shareError,       setShareError]       = useState("");
+  const [desktopSources,   setDesktopSources]   = useState<any[]>([]);
   const qualityRef = useRef<HTMLDivElement>(null);
+
+  // Ouve evento do Main Process pedindo para selecionar tela
+  useEffect(() => {
+    if (window.electronAPI?.onShowDesktopSourceSelector) {
+      window.electronAPI.onShowDesktopSourceSelector((sources) => {
+        setDesktopSources(sources);
+      });
+    }
+  }, []);
 
   // Timer 4h
   const [timeLeft, setTimeLeft] = useState(14400);
@@ -389,6 +399,33 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
         </div>
       </footer>
 
+      {/* Fonte de Tela (Modal do Electron) */}
+      {desktopSources.length > 0 && (
+        <div className="source-selector-overlay">
+          <div className="source-selector-modal">
+            <h3>Selecione o que compartilhar</h3>
+            <div className="source-list">
+              {desktopSources.map(s => (
+                <div key={s.id} className="source-item" onClick={() => {
+                  window.electronAPI?.sendDesktopSourceSelected(s.id);
+                  setDesktopSources([]);
+                }}>
+                  <img src={s.thumbnail} alt={s.name} />
+                  <span>{s.name}</span>
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-ghost" style={{ marginTop: 16, width: "100%" }} onClick={() => {
+              window.electronAPI?.sendDesktopSourceSelected(null);
+              setDesktopSources([]);
+            }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+
       <style>{roomStyles}</style>
     </div>
   );
@@ -445,12 +482,40 @@ const roomStyles = `
   .room-topbar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px;
+    padding-right: 140px; /* Evita os botões do Windows */
     background: var(--color-bg-elevated);
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0; gap: 12px; z-index: 10;
-    /* Espaço para a titlebar overlay do Electron */
-    padding-top: 10px;
+    -webkit-app-region: drag;
   }
+  .room-topbar button {
+    -webkit-app-region: no-drag;
+  }
+  .source-selector-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999; backdrop-filter: blur(4px);
+  }
+  .source-selector-modal {
+    background: var(--color-bg-elevated); padding: 24px;
+    border-radius: var(--radius-lg); width: 80%; max-width: 800px;
+    border: 1px solid var(--color-border);
+    max-height: 80vh; display: flex; flex-direction: column;
+  }
+  .source-selector-modal h3 { margin: 0 0 16px 0; font-size: 1.1rem; color: #fff; }
+  .source-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 16px; overflow-y: auto; padding-right: 8px;
+  }
+  .source-item {
+    background: var(--color-bg-base); border: 2px solid transparent;
+    border-radius: var(--radius-md); overflow: hidden; cursor: pointer;
+    transition: all 0.2s; display: flex; flex-direction: column;
+  }
+  .source-item:hover { border-color: var(--color-accent); transform: translateY(-2px); }
+  .source-item img { width: 100%; aspect-ratio: 16/10; object-fit: cover; background: #000; }
+  .source-item span { padding: 8px; font-size: 0.85rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
   .room-topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .room-logo-mini {
     width: 30px; height: 30px;

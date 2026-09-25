@@ -2,7 +2,7 @@
   "name": "compartilharteladesktop",
   "private": true,
   "version": "1.0.0",
-  "description": "App desktop para compartilhamento de tela com áudio real via LiveKit",
+  "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "concurrently -k \"vite\" \"electron-wait-and-open\"",
@@ -11,7 +11,7 @@
     "dev:all": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm run dev:renderer\" \"npm run dev:electron\"",
     "build": "tsc -b && vite build && tsc -p tsconfig.electron.json",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "dist:win": "npm run build && electron-builder --win",
     "lint": "oxlint"
   },
   "dependencies": {
@@ -51,18 +51,8 @@
       "dist-electron/**/*"
     ],
     "win": {
-      "target": "nsis",
+      "target": "portable",
       "icon": "public/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "public/icon.ico",
-      "uninstallerIcon": "public/icon.ico",
-      "installerHeaderIcon": "public/icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Compartilhar Tela"
     },
     "publish": {
       "provider": "github",

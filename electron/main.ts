@@ -84,7 +84,7 @@ async function createWindow() {
       nodeIntegration: false,
     },
     icon: path.join(__dirname, "../public/icon.ico"),
-    show: false,
+    show: true,
   });
 
   // Permissão para captura de mídia (essencial para getDisplayMedia)
@@ -94,14 +94,30 @@ async function createWindow() {
   });
 
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ["screen"] }).then((sources) => {
-      // Passa a primeira tela + áudio do sistema (loopback)
-      callback({ video: sources[0], audio: "loopback" });
+    desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 320, height: 200 } }).then((sources) => {
+      const serializableSources = sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+      }));
+
+      // Pede para o renderer exibir o seletor
+      win.webContents.send("show-desktop-source-selector", serializableSources);
+
+      ipcMain.once("desktop-source-selected", (_event, sourceId) => {
+        if (!sourceId) {
+          // Cancelado pelo usuário
+          callback(null as any);
+          return;
+        }
+        const selected = sources.find(s => s.id === sourceId) || sources[0];
+        callback({ video: selected, audio: "loopback" });
+      });
     });
   });
 
   win.once("ready-to-show", () => {
-    win.show();
+    // win.show();
     setupUpdater(win);
   });
 
@@ -119,6 +135,7 @@ async function createWindow() {
   }
 }
 
+app.disableHardwareAcceleration();
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {

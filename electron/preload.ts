@@ -4,6 +4,13 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("electronAPI", {
   // Captura de tela: lista todas as telas/janelas disponíveis
   getDesktopSources: () => ipcRenderer.invoke("get-desktop-sources"),
+  
+  // Seletor customizado de tela
+  onShowDesktopSourceSelector: (cb: (sources: any[]) => void) => {
+    ipcRenderer.removeAllListeners("show-desktop-source-selector");
+    ipcRenderer.on("show-desktop-source-selector", (_e, sources) => cb(sources));
+  },
+  sendDesktopSourceSelected: (sourceId: string | null) => ipcRenderer.send("desktop-source-selected", sourceId),
 
   // Versão do app
   getVersion: () => ipcRenderer.invoke("get-version"),

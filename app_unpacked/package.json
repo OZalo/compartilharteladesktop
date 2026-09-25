@@ -1,0 +1,18 @@
+{
+  "name": "compartilharteladesktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "App desktop para compartilhamento de tela com áudio real via LiveKit",
+  "main": "dist-electron/main.js",
+  "dependencies": {
+    "@livekit/components-react": "^2.9.24",
+    "@livekit/components-styles": "^1.2.0",
+    "electron-updater": "^6.3.9",
+    "livekit-client": "^2.22.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "allowScripts": {
+    "electron@36.9.5": true
+  }
+}
