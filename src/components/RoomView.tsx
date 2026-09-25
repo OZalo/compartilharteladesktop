@@ -11,18 +11,22 @@ import "@livekit/components-styles";
 import { LocalAudioTrack, LocalVideoTrack, Track } from "livekit-client";
 import { copyToClipboard, API_URL, LIVEKIT_URL } from "../utils";
 
-type Quality = "720p30" | "1080p30" | "1080p60";
+type Quality = "720p30" | "1080p30" | "1080p60" | "1440p60" | "2160p60";
 
 const QUALITY_LABELS: Record<Quality, string> = {
   "720p30":  "720p · 30fps",
   "1080p30": "1080p · 30fps",
   "1080p60": "1080p · 60fps",
+  "1440p60": "1440p · 60fps",
+  "2160p60": "4K · 60fps",
 };
 
 const QUALITY_CONSTRAINTS: Record<Quality, { width: number; height: number; frameRate: number }> = {
   "720p30":  { width: 1280, height: 720,  frameRate: 30 },
   "1080p30": { width: 1920, height: 1080, frameRate: 30 },
   "1080p60": { width: 1920, height: 1080, frameRate: 60 },
+  "1440p60": { width: 2560, height: 1440, frameRate: 60 },
+  "2160p60": { width: 3840, height: 2160, frameRate: 60 },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,8 +124,8 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
     }
   }, []);
 
-  // Timer 4h
-  const [timeLeft, setTimeLeft] = useState(14400);
+  // Timer 24h
+  const [timeLeft, setTimeLeft] = useState(86400);
   useEffect(() => {
     const iv = setInterval(() => setTimeLeft(t => {
       if (t <= 1) { clearInterval(iv); onLeave(); return 0; }
@@ -177,7 +181,7 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
             height:    { ideal: q.height },
             frameRate: { ideal: q.frameRate },
           },
-          audio: true, // Electron vai incluir áudio loopback automaticamente
+          audio: { echoCancellation: true, noiseSuppression: true }, // Cancela eco e ruído
         });
 
         const videoTrack = stream.getVideoTracks()[0];
@@ -197,7 +201,7 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
         await localParticipant.setScreenShareEnabled(true, {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           resolution: q as any,
-          audio: true,
+          audio: { echoCancellation: true, noiseSuppression: true },
         });
       }
     } catch (err: any) {
@@ -469,27 +473,22 @@ function AlertIcon() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const roomStyles = `
   .room-center {
-    height: 100vh; display: flex; flex-direction: column;
+    height: 100%; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 16px; color: var(--color-text-secondary); font-size: 0.9rem;
   }
   .room-layout {
     display: flex; flex-direction: column;
-    height: 100vh;
+    height: 100%;
     background: var(--color-bg-base);
     overflow: hidden;
   }
   .room-topbar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px;
-    padding-right: 140px; /* Evita os botões do Windows */
     background: var(--color-bg-elevated);
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0; gap: 12px; z-index: 10;
-    -webkit-app-region: drag;
-  }
-  .room-topbar button {
-    -webkit-app-region: no-drag;
   }
   .source-selector-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.8);
