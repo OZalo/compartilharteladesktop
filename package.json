@@ -1,0 +1,74 @@
+{
+  "name": "compartilharteladesktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "App desktop para compartilhamento de tela com áudio real via LiveKit",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"electron-wait-and-open\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && cross-env ELECTRON_DEV=true electron .",
+    "dev:all": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "build": "tsc -b && vite build && tsc -p tsconfig.electron.json",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@livekit/components-react": "^2.9.24",
+    "@livekit/components-styles": "^1.2.0",
+    "electron-updater": "^6.3.9",
+    "livekit-client": "^2.22.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^9.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^36.4.0",
+    "electron-builder": "^25.1.8",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-electron": "^0.29.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.ozalo.compartilhartela",
+    "productName": "Compartilhar Tela",
+    "copyright": "Copyright © 2026 Zalo",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "installerHeaderIcon": "public/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Compartilhar Tela"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "OZalo",
+      "repo": "compartilharteladesktop"
+    }
+  },
+  "allowScripts": {
+    "electron@36.9.5": true
+  }
+}
