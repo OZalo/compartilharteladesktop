@@ -11,7 +11,7 @@
     "dev:all": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm run dev:renderer\" \"npm run dev:electron\"",
     "build": "tsc -b && vite build && tsc -p tsconfig.electron.json",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
+    "dist:win": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "lint": "oxlint"
   },
   "dependencies": {
@@ -32,6 +32,8 @@
     "electron": "^36.4.0",
     "electron-builder": "^25.1.8",
     "oxlint": "^1.81.0",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.4",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vite-plugin-electron": "^0.29.0",
