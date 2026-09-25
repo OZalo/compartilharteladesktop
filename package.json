@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {

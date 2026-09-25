@@ -2,7 +2,7 @@
 
 Aplicativo desktop leve para compartilhar a tela e o áudio do sistema, feito com Electron, React, Vite e LiveKit.
 
-![Badge Versão](https://img.shields.io/badge/vers%C3%A3o-1.0.0-00d4b8?style=flat-square) ![Badge Electron](https://img.shields.io/badge/Electron-36.9.5-313244?style=flat-square&logo=electron) ![Badge React](https://img.shields.io/badge/React-18.3.1-313244?style=flat-square&logo=react)
+![Badge Versão](https://img.shields.io/badge/vers%C3%A3o-1.0.1-00d4b8?style=flat-square) ![Badge Electron](https://img.shields.io/badge/Electron-36.9.5-313244?style=flat-square&logo=electron) ![Badge React](https://img.shields.io/badge/React-18.3.1-313244?style=flat-square&logo=react)
 
 ## O que ele faz
 - Compartilha a tela inteira ou uma janela específica em alta qualidade (até 1080p 60fps).
