@@ -91,7 +91,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
       video={false}
       onDisconnected={onLeave}
       className="lk-room-container"
-      style={{ height: "100vh" }}
+      style={{ height: "100%", display: "flex", flexDirection: "column" }}
     >
       <RoomInner roomName={roomName} onLeave={onLeave} />
     </LiveKitRoom>
