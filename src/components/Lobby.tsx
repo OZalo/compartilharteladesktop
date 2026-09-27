@@ -53,6 +53,9 @@ export default function Lobby({ onEnter }: LobbyProps) {
       if (window.electronAPI.onUpdateAvailable) {
         window.electronAPI.onUpdateAvailable(() => setIsUpdating(true));
       }
+      if (window.electronAPI.onUpdateProgress) {
+        window.electronAPI.onUpdateProgress(() => setIsUpdating(true));
+      }
       if (window.electronAPI.onUpdateError) {
         window.electronAPI.onUpdateError(() => setIsUpdating(false));
       }

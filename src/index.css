@@ -69,6 +69,28 @@ body {
 /* Permite seleção de texto em inputs */
 input, textarea { user-select: text; }
 
+/* Estrutura principal do App com Titlebar Customizada */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+.app-titlebar {
+  height: 36px; /* Altura padrão da barra do Windows/Electron */
+  width: 100%;
+  -webkit-app-region: drag; /* Torna a área arrastável */
+  background: var(--color-bg-base); /* Fundo sólido para esconder rolagem por trás */
+  flex-shrink: 0;
+  z-index: 99999;
+}
+.app-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Background ambient — igual ao web */
 body::before {
   content: '';

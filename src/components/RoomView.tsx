@@ -125,19 +125,16 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
     }
   }, []);
 
-  // Timer 24h
-  const [timeLeft, setTimeLeft] = useState(86400);
+  // Timer (Tempo Ativo)
+  const [timeActive, setTimeActive] = useState(0);
   useEffect(() => {
-    const iv = setInterval(() => setTimeLeft(t => {
-      if (t <= 1) { clearInterval(iv); onLeave(); return 0; }
-      return t - 1;
-    }), 1000);
+    const iv = setInterval(() => setTimeActive(t => t + 1), 1000);
     return () => clearInterval(iv);
-  }, [onLeave]);
+  }, []);
 
   const formatTime = (s: number) => {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    if (h > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
     return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
   };
 
@@ -264,8 +261,8 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
                 Transmitindo
               </span>
             )}
-            <span className="badge" title="Tempo restante da sessão">
-              <ClockIcon /> {formatTime(timeLeft)}
+            <span className="badge" title="Tempo de chamada">
+              <ClockIcon /> {formatTime(timeActive)}
             </span>
           </div>
         </div>
@@ -315,9 +312,9 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
                       }
                     }}
                     style={{ marginLeft: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
-                    title="Tela Flutuante (PiP)"
+                    title="Tela Flutuante (Janelinha)"
                   >
-                    <PiPIcon /> PiP
+                    <PiPIcon /> Janelinha
                   </button>
                 </div>
               </div>
@@ -336,9 +333,9 @@ function RoomInner({ roomName, onLeave }: { roomName: string; onLeave: () => voi
                     }
                   }}
                   style={{ marginLeft: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
-                  title="Tela Flutuante (PiP)"
+                  title="Tela Flutuante (Janelinha)"
                 >
-                  <PiPIcon /> PiP
+                  <PiPIcon /> Janelinha
                 </button>
               </div>
             </div>
@@ -633,7 +630,7 @@ const roomStyles = `
     background: var(--color-bg-base);
   }
   .screen-wrap {
-    position: relative; width: 100%; height: 100%; max-height: 100%;
+    position: relative; width: 100%; flex: 1; min-height: 0;
     border-radius: var(--radius-lg); overflow: hidden;
     background: #000; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
   }

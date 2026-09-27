@@ -17,19 +17,22 @@ export default function App() {
   const handleLeave = () => setSession(null);
 
   return (
-    <>
-      {session ? (
-        <RoomView
-          roomName={session.roomName}
-          displayName={session.displayName}
-          password={session.password}
-          isCreator={session.isCreator}
-          onLeave={handleLeave}
-        />
-      ) : (
-        <Lobby onEnter={handleEnter} />
-      )}
-      <UpdateBanner />
-    </>
+    <div className="app-container">
+      <div className="app-titlebar"></div>
+      <div className="app-content">
+        {session ? (
+          <RoomView
+            roomName={session.roomName}
+            displayName={session.displayName}
+            password={session.password}
+            isCreator={session.isCreator}
+            onLeave={handleLeave}
+          />
+        ) : (
+          <Lobby onEnter={handleEnter} />
+        )}
+        <UpdateBanner />
+      </div>
+    </div>
   );
 }
