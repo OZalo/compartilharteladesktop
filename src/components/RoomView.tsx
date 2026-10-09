@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import Peer, { MediaConnection, DataConnection } from "peerjs";
+import Peer from "peerjs";
 import { copyToClipboard, API_URL } from "../utils";
 
 type Quality = "720p30" | "1080p30" | "1080p60" | "1440p60" | "2160p60";
@@ -57,7 +57,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const qualityRef = useRef<HTMLDivElement>(null);
   
-  const dataConnectionsRef = useRef<Map<string, DataConnection>>(new Map());
+  const dataConnectionsRef = useRef<Map<string, any>>(new Map());
   const participantsRef = useRef<Participant[]>([]);
 
   // Timer
@@ -141,7 +141,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
     });
 
     if (isCreator) {
-      newPeer.on("connection", (conn: DataConnection) => {
+      newPeer.on("connection", (conn: any) => {
         conn.on('open', () => {
           dataConnectionsRef.current.set(conn.peer, conn);
           const newParticipant: Participant = {
@@ -162,7 +162,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
       });
     }
 
-    newPeer.on("call", (call: MediaConnection) => {
+    newPeer.on("call", (call: any) => {
       if (isCreator) {
         call.answer(localStream || new MediaStream());
       } else {
