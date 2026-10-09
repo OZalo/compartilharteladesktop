@@ -94,21 +94,9 @@ export default function Lobby({ onEnter }: LobbyProps) {
     if (!name) { setError("Informe seu nome para continuar."); return; }
     const room = sanitizeRoomName(newRoomName);
     if (!room) { setError("Nome de sala inválido."); return; }
-    setLoading(true);
-    try {
-      const res  = await fetch(`${API_URL}/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomName: room, participantName: name, isCreator: true, password: roomPassword.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Erro ao criar sala."); return; }
-      onEnter({ roomName: room, displayName: name, password: roomPassword.trim() || undefined, isCreator: true });
-    } catch {
-      setError("Não foi possível conectar ao servidor.");
-    } finally {
-      setLoading(false);
-    }
+    
+    // Agora vai direto, PeerJS cuida da conexão
+    onEnter({ roomName: room, displayName: name, password: roomPassword.trim() || undefined, isCreator: true });
   };
 
   const handleJoin = async () => {
@@ -117,21 +105,9 @@ export default function Lobby({ onEnter }: LobbyProps) {
     if (!name) { setError("Informe seu nome para continuar."); return; }
     const room = sanitizeRoomName(joinRoomName);
     if (!room) { setError("Nome de sala inválido."); return; }
-    setLoading(true);
-    try {
-      const res  = await fetch(`${API_URL}/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomName: room, participantName: name, isCreator: false, password: joinPassword.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Erro ao entrar na sala."); return; }
-      onEnter({ roomName: room, displayName: name, password: joinPassword.trim() || undefined, isCreator: false });
-    } catch {
-      setError("Não foi possível conectar ao servidor.");
-    } finally {
-      setLoading(false);
-    }
+    
+    // Agora vai direto, PeerJS cuida da conexão
+    onEnter({ roomName: room, displayName: name, password: joinPassword.trim() || undefined, isCreator: false });
   };
 
   const handleCopyLink = async () => {

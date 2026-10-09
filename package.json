@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "1.2.2",
+  "version": "2.0.5",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -19,6 +19,8 @@
     "@livekit/components-styles": "^1.2.0",
     "electron-updater": "^6.3.9",
     "livekit-client": "^2.22.3",
+    "native-audio": "file:./native-audio",
+    "peerjs": "^1.5.5",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -41,6 +43,7 @@
   },
   "build": {
     "appId": "com.ozalo.compartilhartela",
+    "npmRebuild": false,
     "productName": "Compartilhar Tela",
     "artifactName": "CompartilharTela-Setup-${version}.${ext}",
     "copyright": "Copyright © 2026 Zalo",
