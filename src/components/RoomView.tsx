@@ -600,7 +600,7 @@ function CameraOffIcon({ size = 15 }: { size?: number }) {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-const roomStyles = \`
+const roomStyles = `
   .room-center {
     height: 100%; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -757,4 +757,4 @@ const roomStyles = \`
   .quality-option--active { color: var(--color-accent); }
   .volume-wrap { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--color-text-secondary); }
   .volume-slider { width: 80px; cursor: pointer; accent-color: var(--color-accent); }
-\`;
+`;
