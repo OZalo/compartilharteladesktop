@@ -57,6 +57,23 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const qualityRef = useRef<HTMLDivElement>(null);
   
+  const dummyStreamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const canvas = document.createElement("canvas");
+      canvas.width = 640; canvas.height = 360;
+      const ctx = canvas.getContext("2d");
+      if(ctx) { ctx.fillStyle = "#000"; ctx.fillRect(0,0,640,360); }
+      const videoTrack = canvas.captureStream(1).getVideoTracks()[0];
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioCtx();
+      const dest = audioCtx.createMediaStreamDestination();
+      const audioTrack = dest.stream.getAudioTracks()[0];
+      dummyStreamRef.current = new MediaStream([videoTrack, audioTrack]);
+    }
+  }, []);
+
   const dataConnectionsRef = useRef<Map<string, any>>(new Map());
   const participantsRef = useRef<Participant[]>([]);
 
@@ -126,7 +143,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
           }
         });
 
-        const call = newPeer.call(hostId, new MediaStream());
+        const call = newPeer.call(hostId, dummyStreamRef.current || new MediaStream());
         call.on("stream", (stream: any) => {
           if (stream.getTracks().length > 0) {
             setRemoteStream(stream);
@@ -164,7 +181,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
 
     newPeer.on("call", (call: any) => {
       if (isCreator) {
-        call.answer(localStream || new MediaStream());
+        call.answer(localStream || dummyStreamRef.current || new MediaStream());
       } else {
         call.answer();
       }
@@ -757,4 +774,20 @@ const roomStyles = `
   .quality-option--active { color: var(--color-accent); }
   .volume-wrap { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--color-text-secondary); }
   .volume-slider { width: 80px; cursor: pointer; accent-color: var(--color-accent); }
+
+  @media (max-width: 768px) {
+    .room-topbar { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px; }
+    .room-topbar-right { width: 100%; justify-content: space-between; }
+    .room-name-code { max-width: 120px; }
+    .room-controls { flex-wrap: wrap; padding: 10px; gap: 8px; justify-content: space-between; }
+    #start-share-btn, #stop-share-btn { width: 100%; order: -1; }
+    .volume-wrap { display: none; }
+    .quality-wrap { flex: 1; }
+    #quality-btn { width: 100%; justify-content: center; }
+    .room-status-right { position: static; }
+    .room-sidebar { position: absolute; top: 0; right: 0; bottom: 0; z-index: 100; box-shadow: -4px 0 20px rgba(0,0,0,0.5); }
+    .screen-label { font-size: 0.65rem; padding: 4px 8px; bottom: 8px; left: 8px; }
+    .room-empty { padding: 20px; }
+    .room-empty-title { font-size: 1.1rem; }
+  }
 `;
