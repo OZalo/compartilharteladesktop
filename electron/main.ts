@@ -9,6 +9,14 @@ import {
 import { autoUpdater } from "electron-updater";
 import * as path from "path";
 
+let nativeAudio: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  nativeAudio = require("native-audio");
+} catch (e) {
+  console.log("Módulo native-audio não carregado:", e);
+}
+
 const isDev = process.env.ELECTRON_DEV === "true";
 
 // ─── Auto-Updater ─────────────────────────────────────────────────────────────
@@ -64,6 +72,27 @@ ipcMain.on("open-external", (_, url: string) => {
 
 // ─── IPC: obter versão ────────────────────────────────────────────────────────
 ipcMain.handle("get-version", () => app.getVersion());
+
+// ─── IPC: C++ Native Audio ────────────────────────────────────────────────────
+ipcMain.handle("start-native-audio", (event) => {
+  if (!nativeAudio) return "Módulo nativo não encontrado.";
+  
+  return nativeAudio.startCapture((err: any, buffer: Buffer, channels: number, sampleRate: number, bitsPerSample: number) => {
+    if (err) {
+      console.error("Erro no C++ audio:", err);
+      return;
+    }
+    // Repassa os bytes puros do C++ para o React via IPC
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("native-audio-chunk", buffer, channels, sampleRate, bitsPerSample);
+    }
+  });
+});
+
+ipcMain.handle("stop-native-audio", () => {
+  if (!nativeAudio) return;
+  return nativeAudio.stopCapture();
+});
 
 // ─── Deep Linking e Single Instance ─────────────────────────────────────────────
 if (process.defaultApp) {

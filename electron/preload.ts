@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   sendDesktopSourceSelected: (sourceId: string | null) => ipcRenderer.send("desktop-source-selected", sourceId),
 
+  // C++ Native Audio
+  startNativeAudio: () => ipcRenderer.invoke("start-native-audio"),
+  stopNativeAudio: () => ipcRenderer.invoke("stop-native-audio"),
+  onNativeAudioChunk: (cb: (buffer: Uint8Array, channels: number, sampleRate: number, bitsPerSample: number) => void) => {
+    ipcRenderer.removeAllListeners("native-audio-chunk");
+    ipcRenderer.on("native-audio-chunk", (_e, buffer, channels, sampleRate, bitsPerSample) => cb(buffer, channels, sampleRate, bitsPerSample));
+  },
+
   // Versão do app
   getVersion: () => ipcRenderer.invoke("get-version"),
 

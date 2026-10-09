@@ -11,6 +11,9 @@ export interface ElectronAPI {
   sendDesktopSourceSelected: (sourceId: string | null) => void;
   getVersion: () => Promise<string>;
   openExternal: (url: string) => void;
+  startNativeAudio: () => Promise<any>;
+  stopNativeAudio: () => Promise<any>;
+  onNativeAudioChunk: (cb: (buffer: Uint8Array, channels: number, sampleRate: number, bitsPerSample: number) => void) => void;
   onUpdateAvailable: (cb: (version: string) => void) => void;
   onUpdateProgress: (cb: (percent: number) => void) => void;
   onUpdateDownloaded: (cb: () => void) => void;

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import Peer, { MediaConnection } from "peerjs";
+import Peer from "peerjs";
 import { copyToClipboard, API_URL } from "../utils";
 
 interface RoomViewProps {
@@ -84,7 +84,7 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
       // Atualiza as ligações existentes com a nova stream
       Object.values(peer.connections).forEach((conns: any) => {
         conns.forEach((conn: any) => {
-          if (conn instanceof MediaConnection && conn.peerConnection) {
+          if (conn.peerConnection) {
             const senders = conn.peerConnection.getSenders();
             localStream.getTracks().forEach(track => {
               const sender = senders.find((s: any) => s.track && s.track.kind === track.kind);
@@ -100,8 +100,8 @@ export default function RoomView({ roomName, displayName, isCreator, onLeave }: 
     }
   }, [localStream, peer, isCreator]);
 
-  const setupCall = (call: MediaConnection) => {
-    call.on("stream", (stream) => {
+  const setupCall = (call: any) => {
+    call.on("stream", (stream: any) => {
       console.log("Recebeu stream remota", stream.getTracks());
       if (stream.getTracks().length > 0) {
         setRemoteStream(stream);
