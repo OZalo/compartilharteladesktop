@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Compartilhar Tela</title>
-    <!-- Necessário para Electron capturar mídia via getDisplayMedia -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https: wss:; media-src 'self' blob:; img-src 'self' data: blob: https:;">
+    <!-- Necessário para Electron capturar mídia via getDisplayMedia e WebAudio -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https: wss:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; worker-src 'self' blob: data:; media-src 'self' blob: data:; img-src 'self' data: blob: https:;">
   </head>
   <body>
     <div id="root"></div>

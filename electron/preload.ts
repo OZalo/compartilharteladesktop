@@ -4,7 +4,7 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("electronAPI", {
   // Captura de tela: lista todas as telas/janelas disponíveis
   getDesktopSources: () => ipcRenderer.invoke("get-desktop-sources"),
-  
+
   // Seletor customizado de tela
   onShowDesktopSourceSelector: (cb: (sources: any[]) => void) => {
     ipcRenderer.removeAllListeners("show-desktop-source-selector");
@@ -13,15 +13,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sendDesktopSourceSelected: (sourceId: string | null) => ipcRenderer.send("desktop-source-selected", sourceId),
 
   // C++ Native Audio
-  startNativeAudio: () => ipcRenderer.invoke("start-native-audio"),
+  startNativeAudio: (opts?: { mode?: string; windowHandle?: number }) => ipcRenderer.invoke("start-native-audio", opts),
   stopNativeAudio: () => ipcRenderer.invoke("stop-native-audio"),
   onNativeAudioChunk: (cb: (buffer: Uint8Array, channels: number, sampleRate: number, bitsPerSample: number) => void) => {
     ipcRenderer.removeAllListeners("native-audio-chunk");
     ipcRenderer.on("native-audio-chunk", (_e, buffer, channels, sampleRate, bitsPerSample) => cb(buffer, channels, sampleRate, bitsPerSample));
   },
 
-  // Versão do app
+  // Controle Remoto e Gamepad Virtual (Parsec style)
+  getRemoteControlStatus: () => ipcRenderer.invoke("remote-control-status"),
+  sendMouseInput: (data: any) => ipcRenderer.invoke("send-mouse-input", data),
+  sendKeyboardInput: (data: any) => ipcRenderer.invoke("send-keyboard-input", data),
+  virtualGamepadConnect: (playerIndex: number) => ipcRenderer.invoke("virtual-gamepad-connect", playerIndex),
+  virtualGamepadDisconnect: (playerIndex: number) => ipcRenderer.invoke("virtual-gamepad-disconnect", playerIndex),
+  virtualGamepadUpdate: (playerIndex: number, state: any) => ipcRenderer.invoke("virtual-gamepad-update", playerIndex, state),
+
+  // Versão do app e utilitários
   getVersion: () => ipcRenderer.invoke("get-version"),
+  readClipboard: () => ipcRenderer.invoke("read-clipboard"),
 
   // Abre link no navegador padrão
   openExternal: (url: string) => ipcRenderer.send("open-external", url),

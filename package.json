@@ -1,7 +1,7 @@
 {
   "name": "compartilharteladesktop",
   "private": true,
-  "version": "2.0.8",
+  "version": "3.1.3",
   "description": "Compartilhar Tela",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -22,7 +22,8 @@
     "native-audio": "file:./native-audio",
     "peerjs": "^1.5.5",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "vigemclient": "^1.5.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
@@ -52,7 +53,13 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "native-audio/package.json",
+      "native-audio/build/Release/native_audio.node"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "native-audio/**/*"
     ],
     "win": {
       "target": "nsis",

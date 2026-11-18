@@ -1,0 +1,5 @@
+node_modules/
+build/*
+!build/Release
+build/Release/*
+!build/Release/native_audio.node

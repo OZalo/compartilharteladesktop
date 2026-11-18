@@ -1,0 +1,11 @@
+{
+  "name": "native-audio",
+  "version": "1.0.0",
+  "main": "build/Release/native_audio.node",
+  "scripts": {
+    "install": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.9.2"
+  }
+}
