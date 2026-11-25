@@ -178,15 +178,17 @@ ipcMain.handle("virtual-gamepad-connect", (_event, playerIndex: number) => {
   if (!client) return false;
   try {
     if (virtualGamepads.has(playerIndex)) {
-      virtualGamepads.get(playerIndex).disconnect();
-      virtualGamepads.delete(playerIndex);
+      return true; // Já está conectado
     }
     const pad = client.createX360Controller();
+    pad.updateMode = "manual"; // Atualiza todos os eixos e botões em lote (1 chamada nativa por pacote)
     const err = pad.connect();
     if (!err) {
       virtualGamepads.set(playerIndex, pad);
       console.log(`[ViGEm] Controle virtual Xbox Player ${playerIndex + 1} plugado!`);
       return true;
+    } else {
+      console.warn("[ViGEm] Erro ao conectar pad:", err);
     }
   } catch (e) {
     console.warn("[ViGEm] Erro criando controle virtual:", e);
@@ -197,7 +199,10 @@ ipcMain.handle("virtual-gamepad-connect", (_event, playerIndex: number) => {
 ipcMain.handle("virtual-gamepad-disconnect", (_event, playerIndex: number) => {
   if (virtualGamepads.has(playerIndex)) {
     try {
-      virtualGamepads.get(playerIndex).disconnect();
+      const pad = virtualGamepads.get(playerIndex);
+      pad.resetInputs?.();
+      pad.update?.();
+      pad.disconnect();
       virtualGamepads.delete(playerIndex);
       console.log(`[ViGEm] Controle virtual Xbox Player ${playerIndex + 1} desconectado.`);
     } catch {}
@@ -206,39 +211,56 @@ ipcMain.handle("virtual-gamepad-disconnect", (_event, playerIndex: number) => {
 });
 
 ipcMain.handle("virtual-gamepad-update", (_event, playerIndex: number, state: any) => {
-  const pad = virtualGamepads.get(playerIndex);
-  if (!pad) return;
+  let pad = virtualGamepads.get(playerIndex);
+  if (!pad) {
+    const client = getViGEmClient();
+    if (!client) return;
+    try {
+      pad = client.createX360Controller();
+      pad.updateMode = "manual";
+      const err = pad.connect();
+      if (err) return;
+      virtualGamepads.set(playerIndex, pad);
+    } catch {
+      return;
+    }
+  }
 
   try {
-    // Botões digitais
-    if (state.buttonA !== undefined) pad.button.A.setValue(state.buttonA);
-    if (state.buttonB !== undefined) pad.button.B.setValue(state.buttonB);
-    if (state.buttonX !== undefined) pad.button.X.setValue(state.buttonX);
-    if (state.buttonY !== undefined) pad.button.Y.setValue(state.buttonY);
-    if (state.shoulderL !== undefined) pad.button.SHOULDER_LEFT.setValue(state.shoulderL);
-    if (state.shoulderR !== undefined) pad.button.SHOULDER_RIGHT.setValue(state.shoulderR);
-    if (state.thumbL !== undefined) pad.button.THUMB_LEFT.setValue(state.thumbL);
-    if (state.thumbR !== undefined) pad.button.THUMB_RIGHT.setValue(state.thumbR);
-    if (state.start !== undefined) pad.button.START.setValue(state.start);
-    if (state.back !== undefined) pad.button.BACK.setValue(state.back);
-    if (state.guide !== undefined) pad.button.GUIDE.setValue(state.guide);
+    // Botões digitais (nomes oficiais da biblioteca vigemclient / XUSB_BUTTON)
+    if (state.buttonA !== undefined) pad.button.A.setValue(Boolean(state.buttonA));
+    if (state.buttonB !== undefined) pad.button.B.setValue(Boolean(state.buttonB));
+    if (state.buttonX !== undefined) pad.button.X.setValue(Boolean(state.buttonX));
+    if (state.buttonY !== undefined) pad.button.Y.setValue(Boolean(state.buttonY));
+    if (state.shoulderL !== undefined) pad.button.LEFT_SHOULDER.setValue(Boolean(state.shoulderL));
+    if (state.shoulderR !== undefined) pad.button.RIGHT_SHOULDER.setValue(Boolean(state.shoulderR));
+    if (state.thumbL !== undefined) pad.button.LEFT_THUMB.setValue(Boolean(state.thumbL));
+    if (state.thumbR !== undefined) pad.button.RIGHT_THUMB.setValue(Boolean(state.thumbR));
+    if (state.start !== undefined) pad.button.START.setValue(Boolean(state.start));
+    if (state.back !== undefined) pad.button.BACK.setValue(Boolean(state.back));
+    if (state.guide !== undefined) pad.button.GUIDE.setValue(Boolean(state.guide));
 
-    // D-Pad
-    if (state.dpadUp !== undefined) pad.dpad.UP.setValue(state.dpadUp);
-    if (state.dpadDown !== undefined) pad.dpad.DOWN.setValue(state.dpadDown);
-    if (state.dpadLeft !== undefined) pad.dpad.LEFT.setValue(state.dpadLeft);
-    if (state.dpadRight !== undefined) pad.dpad.RIGHT.setValue(state.dpadRight);
+    // D-Pad (no vigemclient o D-Pad é controlado pelos eixos dpadHorz e dpadVert: -1, 0, +1)
+    const dpadH = (state.dpadRight ? 1 : 0) - (state.dpadLeft ? 1 : 0);
+    const dpadV = (state.dpadUp ? 1 : 0) - (state.dpadDown ? 1 : 0);
+    pad.axis.dpadHorz.setValue(dpadH);
+    pad.axis.dpadVert.setValue(dpadV);
 
-    // Gatilhos Analógicos (0.0 a 1.0)
-    if (state.triggerL !== undefined) pad.axis.triggerL.setValue(state.triggerL);
-    if (state.triggerR !== undefined) pad.axis.triggerR.setValue(state.triggerR);
+    // Gatilhos Analógicos (0.0 a 1.0 -> leftTrigger / rightTrigger)
+    if (state.triggerL !== undefined) pad.axis.leftTrigger.setValue(Number(state.triggerL));
+    if (state.triggerR !== undefined) pad.axis.rightTrigger.setValue(Number(state.triggerR));
 
     // Analógicos X/Y (-1.0 a 1.0)
-    if (state.axisLeftX !== undefined) pad.axis.leftX.setValue(state.axisLeftX);
-    if (state.axisLeftY !== undefined) pad.axis.leftY.setValue(state.axisLeftY);
-    if (state.axisRightX !== undefined) pad.axis.rightX.setValue(state.axisRightX);
-    if (state.axisRightY !== undefined) pad.axis.rightY.setValue(state.axisRightY);
-  } catch {}
+    if (state.axisLeftX !== undefined) pad.axis.leftX.setValue(Number(state.axisLeftX));
+    if (state.axisLeftY !== undefined) pad.axis.leftY.setValue(Number(state.axisLeftY));
+    if (state.axisRightX !== undefined) pad.axis.rightX.setValue(Number(state.axisRightX));
+    if (state.axisRightY !== undefined) pad.axis.rightY.setValue(Number(state.axisRightY));
+
+    // Envia o relatório XUSB completo em uma única chamada nativa ao driver ViGEmBus
+    pad.update();
+  } catch (err) {
+    console.warn("[ViGEm] Erro ao atualizar estado do controle:", err);
+  }
 });
 
 // ─── Deep Linking e Single Instance ───────────────────────────────────────────

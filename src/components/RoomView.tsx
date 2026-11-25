@@ -27,13 +27,129 @@ const AUDIO_MODE_LABELS: Record<AudioMode, string> = {
   "all":             "Áudio: Tudo (Padrão)",
 };
 
-const QUALITY_CONSTRAINTS: Record<Quality, { width: number; height: number; frameRate: number }> = {
-  "720p30":  { width: 1280, height: 720,  frameRate: 30 },
-  "1080p30": { width: 1920, height: 1080, frameRate: 30 },
-  "1080p60": { width: 1920, height: 1080, frameRate: 60 },
-  "1440p60": { width: 2560, height: 1440, frameRate: 60 },
-  "2160p60": { width: 3840, height: 2160, frameRate: 60 },
+const QUALITY_CONSTRAINTS: Record<Quality, { width: number; height: number; frameRate: number; maxBitrateKbps: number }> = {
+  "720p30":  { width: 1280, height: 720,  frameRate: 30, maxBitrateKbps: 10000 },
+  "1080p30": { width: 1920, height: 1080, frameRate: 30, maxBitrateKbps: 18000 },
+  "1080p60": { width: 1920, height: 1080, frameRate: 60, maxBitrateKbps: 30000 },
+  "1440p60": { width: 2560, height: 1440, frameRate: 60, maxBitrateKbps: 45000 },
+  "2160p60": { width: 3840, height: 2160, frameRate: 60, maxBitrateKbps: 65000 },
 };
+
+// Modifica o SDP do WebRTC para remover compressão agressiva de áudio (Opus 510kbps Estéreo Fullband CBR sem DTX) e liberar alto bitrate de vídeo
+function enhanceSdpQuality(sdp: string, maxVideoBitrateKbps: number): string {
+  if (!sdp) return sdp;
+  const startBitrate = Math.round(maxVideoBitrateKbps * 0.65);
+  const minBitrate = Math.min(8000, Math.round(maxVideoBitrateKbps * 0.25));
+
+  const lines = sdp.split(/\r?\n/);
+  let opusPt: string | null = null;
+  const videoPts = new Set<string>();
+  let inVideoSection = false;
+
+  for (const line of lines) {
+    if (line.startsWith("m=video")) {
+      inVideoSection = true;
+    } else if (line.startsWith("m=")) {
+      inVideoSection = false;
+    }
+    const rtpMatch = line.match(/^a=rtpmap:(\d+)\s+([a-zA-Z0-9._-]+)\//i);
+    if (rtpMatch) {
+      const pt = rtpMatch[1];
+      const codec = rtpMatch[2].toLowerCase();
+      if (codec === "opus") {
+        opusPt = pt;
+      } else if (inVideoSection && ["vp8", "vp9", "h264", "av1"].includes(codec)) {
+        videoPts.add(pt);
+      }
+    }
+  }
+
+  inVideoSection = false;
+  let addedVideoBandwidth = false;
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    if (line.startsWith("m=video")) {
+      inVideoSection = true;
+      addedVideoBandwidth = false;
+    } else if (line.startsWith("m=")) {
+      inVideoSection = false;
+    }
+
+    // Força Opus em 510 kbps Estéreo Puro CBR (qualidade transparente de estúdio, sem cortes de silêncio DTX)
+    if (opusPt && line.startsWith(`a=fmtp:${opusPt} `)) {
+      const params = "stereo=1;sprop-stereo=1;maxaveragebitrate=510000;maxplaybackrate=48000;sprop-maxcapturerate=48000;cbr=1;useinbandfec=1;dtx=0";
+      line = `${line};${params}`;
+    }
+
+    // Força bitrate alto de vídeo imediato no encoder do Chromium/WebRTC
+    const fmtpMatch = line.match(/^a=fmtp:(\d+)\s+(.*)$/);
+    if (fmtpMatch && videoPts.has(fmtpMatch[1])) {
+      if (!line.includes("x-google-max-bitrate")) {
+        line = `${line};x-google-max-bitrate=${maxVideoBitrateKbps};x-google-start-bitrate=${startBitrate};x-google-min-bitrate=${minBitrate}`;
+      }
+    }
+
+    out.push(line);
+
+    if (inVideoSection && !addedVideoBandwidth && (line.startsWith("c=IN ") || line.startsWith("m=video"))) {
+      const nextLine = lines[i + 1] || "";
+      if (!nextLine.startsWith("c=IN ") && !nextLine.startsWith("b=AS:")) {
+        out.push(`b=AS:${maxVideoBitrateKbps}`);
+        out.push(`b=TIAS:${maxVideoBitrateKbps * 1000}`);
+        addedVideoBandwidth = true;
+      }
+    }
+  }
+
+  return out.join("\r\n");
+}
+
+function enhancePeerConnectionQuality(pc: RTCPeerConnection | undefined | null, maxVideoBitrateKbps: number, maxFramerate: number) {
+  if (!pc) return;
+  if (!(pc as any).__sdpEnhanced) {
+    (pc as any).__sdpEnhanced = true;
+    const origSetLocal = pc.setLocalDescription.bind(pc);
+    pc.setLocalDescription = async (desc?: RTCLocalSessionDescriptionInit) => {
+      if (desc && desc.sdp) {
+        desc = { ...desc, sdp: enhanceSdpQuality(desc.sdp, maxVideoBitrateKbps) };
+      }
+      return origSetLocal(desc);
+    };
+  }
+
+  const applyParams = () => {
+    try {
+      pc.getSenders().forEach((sender) => {
+        if (!sender.track) return;
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) {
+          params.encodings = [{}];
+        }
+        if (sender.track.kind === "video") {
+          (params as any).degradationPreference = "maintain-resolution";
+          params.encodings[0].maxBitrate = maxVideoBitrateKbps * 1000;
+          params.encodings[0].maxFramerate = maxFramerate;
+          params.encodings[0].scaleResolutionDownBy = 1.0;
+          (params.encodings[0] as any).priority = "high";
+          (params.encodings[0] as any).networkPriority = "high";
+          sender.setParameters(params).catch(() => {});
+        } else if (sender.track.kind === "audio") {
+          params.encodings[0].maxBitrate = 510000;
+          (params.encodings[0] as any).priority = "high";
+          (params.encodings[0] as any).networkPriority = "high";
+          sender.setParameters(params).catch(() => {});
+        }
+      });
+    } catch {}
+  };
+
+  applyParams();
+  setTimeout(applyParams, 600);
+  setTimeout(applyParams, 2000);
+}
 
 // AudioWorklet inline para transformar chunks PCM Float32 48kHz do C++ em MediaStreamTrack contínua e sem engasgos
 const WORKLET_PROCESSOR_CODE = `
@@ -118,13 +234,103 @@ interface Participant {
   isSharing: boolean;
 }
 
+interface RemoteStreamEntry {
+  peerId: string;
+  name: string;
+  stream: MediaStream;
+}
+
+interface StreamItem {
+  id: string;
+  peerId: string;
+  name: string;
+  stream: MediaStream;
+  isLocal: boolean;
+}
+
+interface StreamVideoProps {
+  stream: MediaStream;
+  muted: boolean;
+  volume: number;
+  className?: string;
+  isRemoteControlActive?: boolean;
+  videoRefCallback?: (el: HTMLVideoElement | null) => void;
+  onMouseMove?: (e: React.MouseEvent<HTMLVideoElement>) => void;
+  onMouseDown?: (e: React.MouseEvent<HTMLVideoElement>) => void;
+  onMouseUp?: (e: React.MouseEvent<HTMLVideoElement>) => void;
+  onWheel?: (e: React.WheelEvent<HTMLVideoElement>) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLVideoElement>) => void;
+  onKeyUp?: (e: React.KeyboardEvent<HTMLVideoElement>) => void;
+}
+
+function StreamVideo({
+  stream,
+  muted,
+  volume,
+  className = "screen-video",
+  isRemoteControlActive = false,
+  videoRefCallback,
+  onMouseMove,
+  onMouseDown,
+  onMouseUp,
+  onWheel,
+  onKeyDown,
+  onKeyUp,
+}: StreamVideoProps) {
+  const internalRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const el = internalRef.current;
+    if (el && el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+  }, [stream]);
+
+  useEffect(() => {
+    const el = internalRef.current;
+    if (el) {
+      el.volume = Math.max(0, Math.min(1, volume));
+    }
+  }, [volume]);
+
+  return (
+    <video
+      ref={(el) => {
+        internalRef.current = el;
+        if (videoRefCallback) videoRefCallback(el);
+      }}
+      autoPlay
+      playsInline
+      muted={muted}
+      className={className}
+      tabIndex={onKeyDown ? 0 : undefined}
+      style={{
+        cursor: isRemoteControlActive ? "crosshair" : "default",
+        outline: isRemoteControlActive ? "2px solid var(--color-primary)" : "none",
+      }}
+      onMouseMove={onMouseMove}
+      onMouseDown={onMouseDown}
+      onMouseUp={onMouseUp}
+      onWheel={onWheel}
+      onContextMenu={(e) => {
+        if (isRemoteControlActive) e.preventDefault();
+      }}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
+    />
+  );
+}
+
 export default function RoomView({ roomName, displayName, password, isCreator, onLeave }: RoomViewProps) {
   const cleanRoomName = sanitizeRoomName(roomName);
   const roomSlug = toRoomSlug(cleanRoomName);
+  const hostId = `ct-desktop-${roomSlug}-host`;
 
   const [peer, setPeer] = useState<Peer | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>("Inicializando...");
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, RemoteStreamEntry>>({});
+  const [selectedStreamId, setSelectedStreamId] = useState<string | null>(null);
+  const [isGridView, setIsGridView] = useState<boolean>(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
 
   const [isSharing, setIsSharing] = useState(false);
@@ -136,6 +342,8 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 
   const [quality, setQuality] = useState<Quality>("1080p60");
   const [showQuality, setShowQuality] = useState(false);
+  const qualityRefState = useRef<Quality>(quality);
+  qualityRefState.current = quality;
 
   const [audioMode, setAudioMode] = useState<AudioMode>("exclude-discord");
   const [showAudioMenu, setShowAudioMenu] = useState(false);
@@ -143,16 +351,16 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
   const [volume, setVolume] = useState(1);
   const [isCameraEnabled, setIsCameraEnabled] = useState(false);
 
-  // Parsec / Controle Remoto & Gamepad Coop (Desativado por padrão - anfitrião deve aceitar)
+  // Controle Remoto & Gamepad Coop (Desativado por padrão - quem compartilha deve aceitar)
   const [showRemoteMenu, setShowRemoteMenu] = useState(false);
   const [showGamepadModal, setShowGamepadModal] = useState(false);
   const [allowRemoteInput, setAllowRemoteInput] = useState(false); // Desativado por padrão!
   const [allowGamepadCoop, setAllowGamepadCoop] = useState(false); // Desativado por padrão!
   const [connectedVirtualGamepadsCount, setConnectedVirtualGamepadsCount] = useState(0);
-  const [isRemoteControlActive, setIsRemoteControlActive] = useState(false); // Viewer: modo jogo
-  const [isGamepadPermitted, setIsGamepadPermitted] = useState(false); // Viewer: gamepad autorizado
+  const [isRemoteControlActive, setIsRemoteControlActive] = useState(false);
+  const [isGamepadPermitted, setIsGamepadPermitted] = useState(false);
 
-  // Pedidos de permissão (host recebe, viewer aguarda)
+  // Pedidos de permissão
   interface RemoteControlRequest {
     peerId: string;
     name: string;
@@ -168,10 +376,21 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
   allowGamepadCoopRef.current = allowGamepadCoop;
 
   const connectedVirtualGamepadsRef = useRef<Set<number>>(new Set());
+  const peerGamepadSlotsRef = useRef<Map<string, number>>(new Map());
+  const lastMouseMoveSentRef = useRef<number>(0);
   const viewerDataConnRef = useRef<any>(null);
 
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const getOrAssignGamepadSlot = useCallback((peerId: string): number => {
+    const existing = peerGamepadSlotsRef.current.get(peerId);
+    if (existing !== undefined) return existing;
+    const used = new Set(peerGamepadSlotsRef.current.values());
+    let slot = 0;
+    while (used.has(slot) && slot < 4) slot++;
+    peerGamepadSlotsRef.current.set(peerId, slot);
+    return slot;
+  }, []);
+
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const qualityRef = useRef<HTMLDivElement>(null);
   const audioMenuRef = useRef<HTMLDivElement>(null);
 
@@ -206,6 +425,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 
   const dataConnectionsRef = useRef<Map<string, any>>(new Map());
   const mediaCallsRef = useRef<Set<any>>(new Set());
+  const outgoingCallsRef = useRef<Map<string, any>>(new Map());
   const participantsRef = useRef<Participant[]>([]);
 
   // Timer
@@ -274,10 +494,12 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     });
   }, []);
 
-  // Substitui tracks em todas as conexões P2P ativas
+  // Substitui tracks em todas as conexões P2P ativas (tanto de entrada quanto de saída)
   const replaceTracksForViewers = useCallback((stream: MediaStream) => {
-    mediaCallsRef.current.forEach((call: any) => {
+    const q = QUALITY_CONSTRAINTS[qualityRefState.current];
+    const updateCall = (call: any) => {
       if (call && call.peerConnection) {
+        enhancePeerConnectionQuality(call.peerConnection, q.maxBitrateKbps, q.frameRate);
         const senders = call.peerConnection.getSenders();
         stream.getTracks().forEach((track) => {
           const sender = senders.find((s: any) => s.track && s.track.kind === track.kind);
@@ -290,12 +512,130 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
           }
         });
       }
-    });
+    };
+    mediaCallsRef.current.forEach(updateCall);
+    outgoingCallsRef.current.forEach(updateCall);
   }, []);
+
+  // Envia mensagem P2P para um participante específico (direto se anfitrião, ou via relay do anfitrião se convidado)
+  const sendToPeer = useCallback(
+    (targetPeerId: string, payload: any) => {
+      if (!targetPeerId) return;
+      const msg = { ...payload, fromPeerId: peer?.id, fromName: displayName };
+      if (isCreator) {
+        const conn = dataConnectionsRef.current.get(targetPeerId);
+        if (conn && conn.open) {
+          try {
+            conn.send(msg);
+          } catch {}
+        }
+      } else {
+        const conn = viewerDataConnRef.current;
+        if (conn && conn.open) {
+          try {
+            if (targetPeerId === hostId) {
+              conn.send(msg);
+            } else {
+              conn.send({ type: "relay_to_peer", targetPeerId, payload: msg });
+            }
+          } catch {}
+        }
+      }
+    },
+    [isCreator, peer?.id, displayName, hostId]
+  );
+
+  // Processa pacotes de controle remoto/coop recebidos de qualquer participante
+  const handleRemoteControlData = useCallback(
+    (senderId: string, data: any) => {
+      const effectiveSender = data.fromPeerId || senderId;
+
+      if (data.type === "request_remote_permission") {
+        const subType = data.subType || "mouse_keyboard";
+        // Se o dono do PC já deixou a chave correspondente Ativada manualmente, aprova direto
+        if (
+          (subType === "mouse_keyboard" && allowRemoteInputRef.current) ||
+          (subType === "gamepad" && allowGamepadCoopRef.current)
+        ) {
+          if (subType === "gamepad" && window.electronAPI?.virtualGamepadConnect) {
+            const slot = getOrAssignGamepadSlot(effectiveSender);
+            if (!connectedVirtualGamepadsRef.current.has(slot)) {
+              window.electronAPI.virtualGamepadConnect(slot);
+              connectedVirtualGamepadsRef.current.add(slot);
+              setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
+            }
+          }
+          sendToPeer(effectiveSender, {
+            type: "remote_permission_response",
+            accepted: true,
+            subType,
+          });
+          return;
+        }
+
+        setPendingRequest({
+          peerId: effectiveSender,
+          name: data.name || data.fromName || "Participante",
+          type: subType,
+        });
+        return;
+      }
+
+      if (data.type === "remote_permission_response") {
+        if (data.accepted) {
+          if (data.subType === "mouse_keyboard") {
+            setIsRemoteControlActive(true);
+            setTimeout(() => remoteVideoRef.current?.focus(), 100);
+            setRequestStatusMsg("✓ Acesso aceito! Modo jogo ativado.");
+          } else if (data.subType === "gamepad") {
+            setIsGamepadPermitted(true);
+            setRequestStatusMsg("✓ Acesso aceito! Seu controle de Xbox (Player 2) está ativo.");
+          }
+        } else {
+          if (data.subType === "mouse_keyboard") {
+            setIsRemoteControlActive(false);
+          } else if (data.subType === "gamepad") {
+            setIsGamepadPermitted(false);
+          }
+          setRequestStatusMsg(data.revoked ? "Acesso remoto encerrado pelo anfitrião." : "✕ Solicitação de acesso recusada.");
+        }
+        setTimeout(() => setRequestStatusMsg(""), 4500);
+        return;
+      }
+
+      if (data.type === "input_mouse") {
+        if (allowRemoteInputRef.current && window.electronAPI?.sendMouseInput) {
+          window.electronAPI.sendMouseInput(data.mouseEvent);
+        }
+      } else if (data.type === "input_keyboard") {
+        if (allowRemoteInputRef.current && window.electronAPI?.sendKeyboardInput) {
+          window.electronAPI.sendKeyboardInput(data.keyEvent);
+        }
+      } else if (data.type === "input_gamepad") {
+        if (allowGamepadCoopRef.current && window.electronAPI?.virtualGamepadUpdate) {
+          const pIdx = getOrAssignGamepadSlot(effectiveSender);
+          if (!connectedVirtualGamepadsRef.current.has(pIdx)) {
+            window.electronAPI.virtualGamepadConnect(pIdx);
+            connectedVirtualGamepadsRef.current.add(pIdx);
+            setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
+          }
+          window.electronAPI.virtualGamepadUpdate(pIdx, data.state);
+        }
+      } else if (data.type === "input_gamepad_disconnect") {
+        const pIdx = peerGamepadSlotsRef.current.get(effectiveSender);
+        if (pIdx !== undefined && connectedVirtualGamepadsRef.current.has(pIdx)) {
+          window.electronAPI?.virtualGamepadDisconnect?.(pIdx);
+          connectedVirtualGamepadsRef.current.delete(pIdx);
+          peerGamepadSlotsRef.current.delete(effectiveSender);
+          setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
+        }
+      }
+    },
+    [getOrAssignGamepadSlot, sendToPeer]
+  );
 
   // PeerJS Setup
   useEffect(() => {
-    const hostId = `ct-desktop-${roomSlug}-host`;
     const myId = isCreator ? hostId : undefined;
     const expectedHash = hashPassword(password);
 
@@ -304,7 +644,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 
     newPeer.on("open", (id) => {
       setConnectionStatus(
-        isCreator ? "Sala criada. Aguardando espectadores..." : "Conectado. Chamando anfitrião..."
+        isCreator ? "Sala criada. Pronto para transmitir." : "Conectado à sala."
       );
 
       const me: Participant = { id, name: displayName, isLocal: true, isSharing: false };
@@ -317,56 +657,47 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
         viewerDataConnRef.current = dataConn;
 
         dataConn.on("data", (data: any) => {
+          if (!data || !data.type) return;
+
           if (data.type === "auth_error") {
             setShareError(data.message || "Senha incorreta.");
             setTimeout(onLeave, 1200);
             return;
           }
           if (data.type === "sync_participants") {
-            const synced = data.participants.map((p: Participant) => ({
+            const synced: Participant[] = data.participants.map((p: Participant) => ({
               ...p,
               isLocal: p.id === id,
             }));
             setParticipants(synced);
+            // Remove streams de quem parou de compartilhar ou saiu da sala
+            setRemoteStreams((prev) => {
+              let changed = false;
+              const next = { ...prev };
+              Object.keys(next).forEach((pid) => {
+                const part = synced.find((sp) => sp.id === pid);
+                if (!part || !part.isSharing) {
+                  delete next[pid];
+                  changed = true;
+                }
+              });
+              return changed ? next : prev;
+            });
+            return;
           }
           if (data.type === "share_stopped") {
-            setRemoteStream(null);
-            setConnectionStatus("O anfitrião parou de compartilhar a tela.");
+            const stoppedId = data.peerId || hostId;
+            setRemoteStreams((prev) => {
+              if (!prev[stoppedId]) return prev;
+              const next = { ...prev };
+              delete next[stoppedId];
+              return next;
+            });
+            setConnectionStatus("Uma transmissão foi encerrada.");
+            return;
           }
-          if (data.type === "remote_permission_response") {
-            if (data.accepted) {
-              if (data.subType === "mouse_keyboard") {
-                setIsRemoteControlActive(true);
-                setTimeout(() => remoteVideoRef.current?.focus(), 100);
-                setRequestStatusMsg("✓ Anfitrião aceitou! Modo jogo ativado.");
-              } else if (data.subType === "gamepad") {
-                setIsGamepadPermitted(true);
-                setRequestStatusMsg("✓ Anfitrião aceitou! Seu controle de Xbox (Player 2) está ativo.");
-              }
-            } else {
-              if (data.subType === "mouse_keyboard") {
-                setIsRemoteControlActive(false);
-              } else if (data.subType === "gamepad") {
-                setIsGamepadPermitted(false);
-              }
-              setRequestStatusMsg("✕ O anfitrião recusou a solicitação de acesso.");
-            }
-            setTimeout(() => setRequestStatusMsg(""), 4500);
-          }
-        });
 
-        const call = newPeer.call(hostId, dummyStreamRef.current || new MediaStream(), {
-          metadata: { passwordHash: expectedHash },
-        });
-        call.on("stream", (stream: any) => {
-          if (stream.getTracks().length > 0) {
-            setRemoteStream(stream);
-            setConnectionStatus("Assistindo transmissão");
-          }
-        });
-        call.on("close", () => {
-          setRemoteStream(null);
-          setConnectionStatus("Transmissão encerrada.");
+          handleRemoteControlData(data.fromPeerId || hostId, data);
         });
       }
     });
@@ -385,75 +716,131 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
           dataConnectionsRef.current.set(conn.peer, conn);
           const newParticipant: Participant = {
             id: conn.peer,
-            name: conn.metadata?.name || "Espectador",
+            name: conn.metadata?.name || "Participante",
             isLocal: false,
             isSharing: false,
           };
           setParticipants((prev) => [...prev.filter((p) => p.id !== conn.peer), newParticipant]);
-          setTimeout(broadcastParticipants, 300);
+          setTimeout(broadcastParticipants, 250);
 
-          // Escuta inputs remotos do convidado (Mouse, Teclado, Gamepad Xbox)
           conn.on("data", (data: any) => {
             if (!data || !data.type) return;
 
-            if (data.type === "request_remote_permission") {
-              setPendingRequest({
-                peerId: conn.peer,
-                name: data.name || "Espectador",
-                type: data.subType || "mouse_keyboard",
-              });
+            // Relay de mensagens entre dois participantes da sala
+            if (data.type === "relay_to_peer" && data.targetPeerId && data.payload) {
+              const targetConn = dataConnectionsRef.current.get(data.targetPeerId);
+              if (targetConn && targetConn.open) {
+                try {
+                  targetConn.send({ ...data.payload, fromPeerId: conn.peer });
+                } catch {}
+              }
               return;
             }
 
-            if (data.type === "input_mouse") {
-              if (allowRemoteInputRef.current && window.electronAPI?.sendMouseInput) {
-                window.electronAPI.sendMouseInput(data.mouseEvent);
+            // Atualização de estado de transmissão de qualquer participante
+            if (data.type === "update_sharing_state") {
+              const sharingFlag = Boolean(data.isSharing);
+              setParticipants((prev) =>
+                prev.map((p) => (p.id === conn.peer ? { ...p, isSharing: sharingFlag } : p))
+              );
+              if (!sharingFlag) {
+                setRemoteStreams((prev) => {
+                  if (!prev[conn.peer]) return prev;
+                  const next = { ...prev };
+                  delete next[conn.peer];
+                  return next;
+                });
               }
-            } else if (data.type === "input_keyboard") {
-              if (allowRemoteInputRef.current && window.electronAPI?.sendKeyboardInput) {
-                window.electronAPI.sendKeyboardInput(data.keyEvent);
-              }
-            } else if (data.type === "input_gamepad") {
-              if (allowGamepadCoopRef.current && window.electronAPI?.virtualGamepadUpdate) {
-                const pIdx = typeof data.playerIndex === "number" ? data.playerIndex : 0;
-                if (!connectedVirtualGamepadsRef.current.has(pIdx)) {
-                  window.electronAPI.virtualGamepadConnect(pIdx);
-                  connectedVirtualGamepadsRef.current.add(pIdx);
-                  setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
-                }
-                window.electronAPI.virtualGamepadUpdate(pIdx, data.state);
-              }
-            } else if (data.type === "input_gamepad_disconnect") {
-              const pIdx = typeof data.playerIndex === "number" ? data.playerIndex : 0;
-              if (connectedVirtualGamepadsRef.current.has(pIdx)) {
-                window.electronAPI?.virtualGamepadDisconnect?.(pIdx);
-                connectedVirtualGamepadsRef.current.delete(pIdx);
-                setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
-              }
+              setTimeout(broadcastParticipants, 100);
+              return;
             }
+
+            if (data.type === "share_stopped") {
+              const stoppedId = data.peerId || conn.peer;
+              setRemoteStreams((prev) => {
+                if (!prev[stoppedId]) return prev;
+                const next = { ...prev };
+                delete next[stoppedId];
+                return next;
+              });
+              setParticipants((prev) =>
+                prev.map((p) => (p.id === stoppedId ? { ...p, isSharing: false } : p))
+              );
+              dataConnectionsRef.current.forEach((c, pid) => {
+                if (pid !== stoppedId && c && c.open) {
+                  try {
+                    c.send({ type: "share_stopped", peerId: stoppedId });
+                  } catch {}
+                }
+              });
+              setTimeout(broadcastParticipants, 100);
+              return;
+            }
+
+            handleRemoteControlData(conn.peer, data);
           });
         });
 
         conn.on("close", () => {
           dataConnectionsRef.current.delete(conn.peer);
+          outgoingCallsRef.current.delete(conn.peer);
+          setRemoteStreams((prev) => {
+            if (!prev[conn.peer]) return prev;
+            const next = { ...prev };
+            delete next[conn.peer];
+            return next;
+          });
           setParticipants((prev) => prev.filter((p) => p.id !== conn.peer));
-          setTimeout(broadcastParticipants, 300);
+          dataConnectionsRef.current.forEach((c) => {
+            if (c && c.open) {
+              try {
+                c.send({ type: "share_stopped", peerId: conn.peer });
+              } catch {}
+            }
+          });
+          setTimeout(broadcastParticipants, 250);
         });
       });
     }
 
+    // Qualquer participante na sala pode receber chamadas de vídeo de quem estiver compartilhando a tela
     newPeer.on("call", (call: any) => {
-      if (isCreator) {
-        if (expectedHash && call.metadata?.passwordHash !== expectedHash) {
-          call.close();
-          return;
-        }
-        mediaCallsRef.current.add(call);
-        call.on("close", () => mediaCallsRef.current.delete(call));
+      if (isCreator && expectedHash && call.metadata?.passwordHash && call.metadata.passwordHash !== expectedHash) {
+        call.close();
+        return;
+      }
+
+      const q = QUALITY_CONSTRAINTS[qualityRefState.current];
+      mediaCallsRef.current.add(call);
+      call.on("close", () => {
+        mediaCallsRef.current.delete(call);
+      });
+
+      if (!call.metadata?.sharerId && isCreator) {
         call.answer(localStreamRef.current || dummyStreamRef.current || new MediaStream());
       } else {
         call.answer();
       }
+      enhancePeerConnectionQuality(call.peerConnection, q.maxBitrateKbps, q.frameRate);
+
+      call.on("stream", (stream: MediaStream) => {
+        if (!stream || stream.getVideoTracks().length === 0) return;
+        const sharerId = call.metadata?.sharerId || call.peer;
+        const knownParticipant = participantsRef.current.find((p) => p.id === sharerId);
+        const sharerName =
+          call.metadata?.sharerName || knownParticipant?.name || "Participante";
+
+        setRemoteStreams((prev) => ({
+          ...prev,
+          [sharerId]: {
+            peerId: sharerId,
+            name: sharerName,
+            stream,
+          },
+        }));
+        setSelectedStreamId((curr) => (curr === null || curr === "local" ? sharerId : curr));
+        setConnectionStatus("Assistindo transmissão");
+      });
     });
 
     newPeer.on("error", (err) => {
@@ -464,40 +851,88 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     setPeer(newPeer);
     return () => {
       mediaCallsRef.current.clear();
+      outgoingCallsRef.current.forEach((c) => {
+        try {
+          c.close();
+        } catch {}
+      });
+      outgoingCallsRef.current.clear();
       connectedVirtualGamepadsRef.current.forEach((pIdx) => {
         window.electronAPI?.virtualGamepadDisconnect?.(pIdx);
       });
       connectedVirtualGamepadsRef.current.clear();
       newPeer.destroy();
     };
-  }, [roomSlug, isCreator, displayName, password, broadcastParticipants, onLeave]);
+  }, [roomSlug, hostId, isCreator, displayName, password, broadcastParticipants, handleRemoteControlData, onLeave]);
 
-  // Atualiza a flag isSharing do anfitrião
+  // Atualiza a flag isSharing de quem estiver transmitindo (anfitrião ou participante)
   useEffect(() => {
+    setParticipants((prev) => prev.map((p) => (p.isLocal ? { ...p, isSharing } : p)));
     if (isCreator) {
-      setParticipants((prev) => prev.map((p) => (p.isLocal ? { ...p, isSharing } : p)));
-      setTimeout(broadcastParticipants, 200);
+      setTimeout(broadcastParticipants, 150);
+    } else if (viewerDataConnRef.current?.open) {
+      try {
+        viewerDataConnRef.current.send({
+          type: "update_sharing_state",
+          isSharing,
+          name: displayName,
+        });
+      } catch {}
     }
-  }, [isSharing, isCreator, broadcastParticipants]);
+  }, [isSharing, isCreator, displayName, broadcastParticipants]);
 
-  // Envia a nova stream para os espectadores
+  // Quando EU estou compartilhando a tela, envio minha stream (em alta qualidade sem compressão) para todos os participantes da sala
   useEffect(() => {
-    if (isCreator && peer && localStream) {
-      replaceTracksForViewers(localStream);
-    }
-  }, [localStream, peer, isCreator, replaceTracksForViewers]);
+    if (!peer || !isSharing || !localStream) return;
+    const q = QUALITY_CONSTRAINTS[qualityRefState.current];
+    const expectedHash = hashPassword(password);
 
-  useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream]);
-
-  useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-    }
-  }, [localStream]);
+    participants.forEach((p) => {
+      if (p.isLocal || !p.id || p.id === peer.id) return;
+      const existingCall = outgoingCallsRef.current.get(p.id);
+      if (existingCall && existingCall.peerConnection && existingCall.peerConnection.connectionState !== "closed") {
+        // Já existe chamada ativa: garante que as tracks atuais estão nela
+        enhancePeerConnectionQuality(existingCall.peerConnection, q.maxBitrateKbps, q.frameRate);
+        const senders = existingCall.peerConnection.getSenders();
+        localStream.getTracks().forEach((track) => {
+          const sender = senders.find((s: any) => s.track && s.track.kind === track.kind);
+          if (sender) {
+            sender.replaceTrack(track).catch(() => {});
+          } else {
+            try {
+              existingCall.peerConnection.addTrack(track, localStream);
+            } catch {}
+          }
+        });
+      } else {
+        try {
+          const call = peer.call(p.id, localStream, {
+            metadata: {
+              sharerId: peer.id,
+              sharerName: displayName,
+              passwordHash: expectedHash,
+            },
+          });
+          if (call) {
+            outgoingCallsRef.current.set(p.id, call);
+            enhancePeerConnectionQuality(call.peerConnection, q.maxBitrateKbps, q.frameRate);
+            call.on("close", () => {
+              if (outgoingCallsRef.current.get(p.id) === call) {
+                outgoingCallsRef.current.delete(p.id);
+              }
+            });
+            call.on("error", () => {
+              if (outgoingCallsRef.current.get(p.id) === call) {
+                outgoingCallsRef.current.delete(p.id);
+              }
+            });
+          }
+        } catch (err) {
+          console.warn("Falha ao chamar participante:", p.id, err);
+        }
+      }
+    });
+  }, [participants, localStream, isSharing, peer, displayName, password]);
 
   const stopNativeAudioPipeline = useCallback(async () => {
     try {
@@ -511,7 +946,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     }
   }, []);
 
-  // Inicia o pipeline C++ Process Loopback (excluindo Discord ou capturando tudo)
+  // Inicia o pipeline C++ Process Loopback (48kHz Float32 Stereo puro via AudioWorklet de baixa latência)
   const buildCleanAudioTrack = useCallback(
     async (mode: AudioMode): Promise<MediaStreamTrack | null> => {
       await stopNativeAudioPipeline();
@@ -534,72 +969,102 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
         const audioCtx: AudioContext = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
         nativeAudioCtxRef.current = audioCtx;
 
-        const capacity = 48000 * 2;
-        const ringL = new Float32Array(capacity);
-        const ringR = new Float32Array(capacity);
-        let writePos = 0;
-        let readPos = 0;
-        let available = 0;
-
-        const scriptNode = audioCtx.createScriptProcessor(1024, 1, 2);
-        scriptNode.onaudioprocess = (audioProcessingEvent) => {
-          const outputBuffer = audioProcessingEvent.outputBuffer;
-          const outL = outputBuffer.getChannelData(0);
-          const outR = outputBuffer.numberOfChannels > 1 ? outputBuffer.getChannelData(1) : null;
-          const frameCount = outL.length;
-
-          for (let i = 0; i < frameCount; i++) {
-            if (available > 0) {
-              outL[i] = ringL[readPos];
-              if (outR) outR[i] = ringR[readPos];
-              readPos = (readPos + 1) % capacity;
-              available--;
-            } else {
-              outL[i] = 0;
-              if (outR) outR[i] = 0;
-            }
-          }
-        };
-
-        const osc = audioCtx.createOscillator();
-        const silentGain = audioCtx.createGain();
-        silentGain.gain.value = 0;
-        osc.connect(silentGain);
-        silentGain.connect(scriptNode);
-        osc.start();
-
         const dest = audioCtx.createMediaStreamDestination();
-        scriptNode.connect(dest);
+        dest.channelCount = 2;
+        dest.channelCountMode = "explicit";
+        dest.channelInterpretation = "speakers";
+
+        let pushSamplesToAudioNode: (samples: Float32Array, channels: number) => void;
+
+        // Tenta usar AudioWorklet (thread de áudio dedicada, zero engasgo de UI) com fallback para ScriptProcessor
+        let workletLoaded = false;
+        if (audioCtx.audioWorklet) {
+          try {
+            const blob = new Blob([WORKLET_PROCESSOR_CODE], { type: "application/javascript" });
+            const url = URL.createObjectURL(blob);
+            await audioCtx.audioWorklet.addModule(url);
+            URL.revokeObjectURL(url);
+            const workletNode = new AudioWorkletNode(audioCtx, "native-pcm-processor", {
+              numberOfInputs: 0,
+              numberOfOutputs: 1,
+              outputChannelCount: [2],
+            });
+            workletNode.connect(dest);
+            pushSamplesToAudioNode = (samples: Float32Array, channels: number) => {
+              workletNode.port.postMessage({ samples, channels });
+            };
+            workletLoaded = true;
+          } catch (err) {
+            console.warn("[NativeAudio] AudioWorklet fallback para ScriptProcessor:", err);
+          }
+        }
+
+        if (!workletLoaded) {
+          const capacity = 48000 * 2;
+          const ringL = new Float32Array(capacity);
+          const ringR = new Float32Array(capacity);
+          let writePos = 0;
+          let readPos = 0;
+          let available = 0;
+
+          const scriptNode = audioCtx.createScriptProcessor(512, 1, 2);
+          scriptNode.onaudioprocess = (audioProcessingEvent) => {
+            const outputBuffer = audioProcessingEvent.outputBuffer;
+            const outL = outputBuffer.getChannelData(0);
+            const outR = outputBuffer.numberOfChannels > 1 ? outputBuffer.getChannelData(1) : null;
+            const frameCount = outL.length;
+
+            for (let i = 0; i < frameCount; i++) {
+              if (available > 0) {
+                outL[i] = ringL[readPos];
+                if (outR) outR[i] = ringR[readPos];
+                readPos = (readPos + 1) % capacity;
+                available--;
+              } else {
+                outL[i] = 0;
+                if (outR) outR[i] = 0;
+              }
+            }
+          };
+
+          const osc = audioCtx.createOscillator();
+          const silentGain = audioCtx.createGain();
+          silentGain.gain.value = 0;
+          osc.connect(silentGain);
+          silentGain.connect(scriptNode);
+          osc.start();
+          scriptNode.connect(dest);
+
+          pushSamplesToAudioNode = (samples: Float32Array, channels: number) => {
+            const ch = channels || 2;
+            const frames = Math.floor(samples.length / ch);
+            const maxBufferedFrames = 48000 * 0.18;
+            if (available + frames > maxBufferedFrames) {
+              const drop = available + frames - Math.floor(48000 * 0.06);
+              if (drop > 0 && drop <= available) {
+                readPos = (readPos + drop) % capacity;
+                available -= drop;
+              } else {
+                readPos = 0;
+                writePos = 0;
+                available = 0;
+              }
+            }
+
+            for (let i = 0; i < frames; i++) {
+              const l = samples[i * ch] || 0;
+              const r = ch > 1 ? samples[i * ch + 1] || 0 : l;
+              ringL[writePos] = l;
+              ringR[writePos] = r;
+              writePos = (writePos + 1) % capacity;
+            }
+            available = Math.min(capacity, available + frames);
+          };
+        }
 
         if (audioCtx.state === "suspended") {
           await audioCtx.resume();
         }
-
-        const pushSamplesToRing = (samples: Float32Array, channels: number) => {
-          const ch = channels || 2;
-          const frames = Math.floor(samples.length / ch);
-          const maxBufferedFrames = 48000 * 0.18;
-          if (available + frames > maxBufferedFrames) {
-            const drop = available + frames - Math.floor(48000 * 0.06);
-            if (drop > 0 && drop <= available) {
-              readPos = (readPos + drop) % capacity;
-              available -= drop;
-            } else {
-              readPos = 0;
-              writePos = 0;
-              available = 0;
-            }
-          }
-
-          for (let i = 0; i < frames; i++) {
-            const l = samples[i * ch] || 0;
-            const r = ch > 1 ? samples[i * ch + 1] || 0 : l;
-            ringL[writePos] = l;
-            ringR[writePos] = r;
-            writePos = (writePos + 1) % capacity;
-          }
-          available = Math.min(capacity, available + frames);
-        };
 
         window.electronAPI.onNativeAudioChunk((buffer, channels, _sampleRate, bitsPerSample) => {
           if (!buffer || buffer.byteLength === 0) return;
@@ -608,7 +1073,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
             const aligned = new Uint8Array(buffer.byteLength);
             aligned.set(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
             const floatSamples = new Float32Array(aligned.buffer);
-            pushSamplesToRing(floatSamples, channels);
+            pushSamplesToAudioNode(floatSamples, channels);
           } else if (bitsPerSample === 16) {
             const aligned = new Uint8Array(buffer.byteLength);
             aligned.set(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
@@ -617,7 +1082,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
             for (let i = 0; i < int16.length; i++) {
               floatSamples[i] = int16[i] / 32768.0;
             }
-            pushSamplesToRing(floatSamples, channels);
+            pushSamplesToAudioNode(floatSamples, channels);
           }
         });
 
@@ -629,7 +1094,19 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
         console.log("[NativeAudio] Mode:", effectiveMode, "Status:", status);
 
         if (typeof status === "string" && status.startsWith("OK:")) {
-          return dest.stream.getAudioTracks()[0];
+          const track = dest.stream.getAudioTracks()[0];
+          if (track && track.applyConstraints) {
+            track
+              .applyConstraints({
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                channelCount: 2,
+                sampleRate: 48000,
+              } as any)
+              .catch(() => {});
+          }
+          return track;
         }
 
         await stopNativeAudioPipeline();
@@ -651,13 +1128,23 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 
       if (window.electronAPI) {
         rawStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.frameRate } },
-          audio: false, // O áudio é capturado 100% pelo módulo C++ nativo!
+          video: {
+            width: { ideal: q.width, max: q.width },
+            height: { ideal: q.height, max: q.height },
+            frameRate: { ideal: q.frameRate, max: q.frameRate },
+          },
+          audio: false, // O áudio é capturado 100% pelo módulo C++ nativo sem filtros DSP!
         });
       } else {
         rawStream = await navigator.mediaDevices.getDisplayMedia({
           video: { width: q.width, height: q.height, frameRate: q.frameRate },
-          audio: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 2,
+            sampleRate: 48000,
+          } as any,
         });
       }
 
@@ -670,6 +1157,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
 
       setLocalStream(finalStream);
       setIsSharing(true);
+      setSelectedStreamId((curr) => curr || "local");
 
       videoTrack.onended = () => {
         handleStopShare();
@@ -713,71 +1201,119 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     setLocalStream(null);
     setIsSharing(false);
 
-    // Substitui as tracks dos espectadores pela dummyStream (canvas preto) para não congelar o último frame
+    // Fecha chamadas de saída que este participante iniciou
+    outgoingCallsRef.current.forEach((call) => {
+      try {
+        call.close();
+      } catch {}
+    });
+    outgoingCallsRef.current.clear();
+
+    // Se havia chamadas legadas, substitui pela dummyStream
     if (dummyStreamRef.current) {
       replaceTracksForViewers(dummyStreamRef.current);
     }
 
-    // Avisa os espectadores via DataChannel para limpar o player de vídeo e mostrar o estado de espera
-    dataConnectionsRef.current.forEach((conn) => {
-      if (conn && conn.open) {
-        try {
-          conn.send({ type: "share_stopped" });
-        } catch {}
-      }
-    });
+    const myPeerId = peer?.id || (isCreator ? hostId : "");
 
-    // Desconecta quaisquer gamepads virtuais se o anfitrião parar a live
+    // Notifica todos na sala que nossa transmissão parou
+    if (isCreator) {
+      dataConnectionsRef.current.forEach((conn) => {
+        if (conn && conn.open) {
+          try {
+            conn.send({ type: "share_stopped", peerId: myPeerId });
+          } catch {}
+        }
+      });
+    } else if (viewerDataConnRef.current?.open) {
+      try {
+        viewerDataConnRef.current.send({ type: "share_stopped", peerId: myPeerId });
+        viewerDataConnRef.current.send({ type: "update_sharing_state", isSharing: false });
+      } catch {}
+    }
+
+    // Desconecta quaisquer gamepads virtuais ativos
     connectedVirtualGamepadsRef.current.forEach((pIdx) => {
       window.electronAPI?.virtualGamepadDisconnect?.(pIdx);
     });
     connectedVirtualGamepadsRef.current.clear();
     setConnectedVirtualGamepadsCount(0);
-  }, [stopNativeAudioPipeline, replaceTracksForViewers]);
+  }, [stopNativeAudioPipeline, replaceTracksForViewers, peer?.id, isCreator, hostId]);
 
-  // Loop de Gamepad do espectador (captura controle físico USB/Bluetooth e transmite via DataChannel)
+  // Lista unificada de todas as transmissões ativas na sala (remotas primeiro, depois a local)
+  const remoteStreamList = Object.values(remoteStreams);
+  const allStreams: StreamItem[] = [
+    ...remoteStreamList.map((r) => ({
+      id: r.peerId,
+      peerId: r.peerId,
+      name: r.name,
+      stream: r.stream,
+      isLocal: false,
+    })),
+    ...(isSharing && localStream
+      ? [
+          {
+            id: "local",
+            peerId: peer?.id || "local",
+            name: `${displayName} (Sua tela)`,
+            stream: localStream,
+            isLocal: true,
+          },
+        ]
+      : []),
+  ];
+
+  const focusedStream: StreamItem | null =
+    allStreams.find((s) => s.id === selectedStreamId) || allStreams[0] || null;
+
+  // Destino atual dos inputs remotos (quem é dono da tela que estamos assistindo no momento)
+  const activeRemoteTargetId =
+    focusedStream && !focusedStream.isLocal
+      ? focusedStream.peerId
+      : remoteStreamList[0]?.peerId || (!isCreator ? hostId : "");
+
+  const activeRemoteTargetRef = useRef(activeRemoteTargetId);
+  activeRemoteTargetRef.current = activeRemoteTargetId;
+
+  // Loop de Gamepad (captura controle físico USB/Bluetooth e transmite para o dono da tela assistida)
   useEffect(() => {
-    if (isCreator) return;
-
     let animFrame: number;
     let lastState: VirtualGamepadState | null = null;
     let wasConnected = false;
 
     const poll = () => {
-      const gamepads = typeof navigator.getGamepads === "function" ? navigator.getGamepads() : [];
-      let activePad: Gamepad | null = null;
-      for (let i = 0; i < gamepads.length; i++) {
-        if (gamepads[i]) {
-          activePad = gamepads[i];
-          break;
+      const targetId = activeRemoteTargetRef.current;
+      if (targetId && isGamepadPermitted) {
+        const gamepads = typeof navigator.getGamepads === "function" ? navigator.getGamepads() : [];
+        let activePad: Gamepad | null = null;
+        for (let i = 0; i < gamepads.length; i++) {
+          if (gamepads[i]) {
+            activePad = gamepads[i];
+            break;
+          }
         }
-      }
 
-      const conn = viewerDataConnRef.current;
-      if (activePad && conn && conn.open) {
-        wasConnected = true;
-        const config = loadGamepadConfig();
-        const currentSample = sampleGamepad(activePad, config);
+        if (activePad) {
+          wasConnected = true;
+          const config = loadGamepadConfig();
+          const currentSample = sampleGamepad(activePad, config);
 
-        if (isGamepadStateDifferent(lastState, currentSample)) {
-          lastState = currentSample;
-          try {
-            conn.send({
+          if (isGamepadStateDifferent(lastState, currentSample)) {
+            lastState = currentSample;
+            sendToPeer(targetId, {
               type: "input_gamepad",
               playerIndex: 0,
               state: currentSample,
             });
-          } catch {}
-        }
-      } else if (wasConnected && conn && conn.open) {
-        wasConnected = false;
-        lastState = null;
-        try {
-          conn.send({
+          }
+        } else if (wasConnected) {
+          wasConnected = false;
+          lastState = null;
+          sendToPeer(targetId, {
             type: "input_gamepad_disconnect",
             playerIndex: 0,
           });
-        } catch {}
+        }
       }
 
       animFrame = requestAnimationFrame(poll);
@@ -786,65 +1322,94 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     animFrame = requestAnimationFrame(poll);
     return () => {
       cancelAnimationFrame(animFrame);
-      if (wasConnected && viewerDataConnRef.current?.open) {
-        try {
-          viewerDataConnRef.current.send({
-            type: "input_gamepad_disconnect",
-            playerIndex: 0,
-          });
-        } catch {}
+      if (wasConnected && activeRemoteTargetRef.current) {
+        sendToPeer(activeRemoteTargetRef.current, {
+          type: "input_gamepad_disconnect",
+          playerIndex: 0,
+        });
       }
     };
-  }, [isCreator]);
+  }, [isGamepadPermitted, sendToPeer]);
 
-  // Handlers de Mouse e Teclado do espectador para enviar ao anfitrião
+  // Calcula coordenadas exatas (0.0 a 1.0) descontando barras pretas do object-fit: contain
+  const getNormalizedVideoCoords = (e: React.MouseEvent<HTMLVideoElement>): { x: number; y: number } | null => {
+    const video = e.currentTarget;
+    const rect = video.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    let renderWidth = rect.width;
+    let renderHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      const videoRatio = video.videoWidth / video.videoHeight;
+      const elemRatio = rect.width / rect.height;
+      if (elemRatio > videoRatio) {
+        // Barras pretas nas laterais (pillarbox)
+        renderWidth = rect.height * videoRatio;
+        offsetX = (rect.width - renderWidth) / 2;
+      } else {
+        // Barras pretas em cima e embaixo (letterbox)
+        renderHeight = rect.width / videoRatio;
+        offsetY = (rect.height - renderHeight) / 2;
+      }
+    }
+
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left - offsetX) / renderWidth));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top - offsetY) / renderHeight));
+    return { x, y };
+  };
+
+  // Handlers de Mouse e Teclado para enviar ao dono da tela assistida
   const handleVideoMouseMove = (e: React.MouseEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-    try {
-      viewerDataConnRef.current.send({
-        type: "input_mouse",
-        mouseEvent: { type: "move", x, y },
-      });
-    } catch {}
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
+    const now = performance.now();
+    if (now - lastMouseMoveSentRef.current < 8) return; // Limita a ~120Hz para não congestionar o DataChannel
+    lastMouseMoveSentRef.current = now;
+
+    const coords = getNormalizedVideoCoords(e);
+    if (!coords) return;
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_mouse",
+      mouseEvent: { type: "move", x: coords.x, y: coords.y },
+    });
   };
 
   const handleVideoMouseDown = (e: React.MouseEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
     e.currentTarget.focus();
-    try {
-      viewerDataConnRef.current.send({
+    const coords = getNormalizedVideoCoords(e);
+    if (coords) {
+      sendToPeer(activeRemoteTargetId, {
         type: "input_mouse",
-        mouseEvent: { type: "down", button: e.button },
+        mouseEvent: { type: "move", x: coords.x, y: coords.y },
       });
-    } catch {}
+    }
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_mouse",
+      mouseEvent: { type: "down", button: e.button },
+    });
   };
 
   const handleVideoMouseUp = (e: React.MouseEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
-    try {
-      viewerDataConnRef.current.send({
-        type: "input_mouse",
-        mouseEvent: { type: "up", button: e.button },
-      });
-    } catch {}
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_mouse",
+      mouseEvent: { type: "up", button: e.button },
+    });
   };
 
   const handleVideoWheel = (e: React.WheelEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
-    try {
-      viewerDataConnRef.current.send({
-        type: "input_mouse",
-        mouseEvent: { type: "wheel", deltaY: Math.sign(e.deltaY) },
-      });
-    } catch {}
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_mouse",
+      mouseEvent: { type: "wheel", deltaY: Math.sign(e.deltaY) },
+    });
   };
 
   const handleVideoKeyDown = (e: React.KeyboardEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
     if (e.key === "Escape") {
       setIsRemoteControlActive(false);
       return;
@@ -852,22 +1417,18 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].includes(e.code)) {
       e.preventDefault();
     }
-    try {
-      viewerDataConnRef.current.send({
-        type: "input_keyboard",
-        keyEvent: { type: "down", vk: e.keyCode || e.which },
-      });
-    } catch {}
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_keyboard",
+      keyEvent: { type: "down", vk: e.keyCode || e.which },
+    });
   };
 
   const handleVideoKeyUp = (e: React.KeyboardEvent<HTMLVideoElement>) => {
-    if (!isRemoteControlActive || !viewerDataConnRef.current?.open) return;
-    try {
-      viewerDataConnRef.current.send({
-        type: "input_keyboard",
-        keyEvent: { type: "up", vk: e.keyCode || e.which },
-      });
-    } catch {}
+    if (!isRemoteControlActive || !activeRemoteTargetId) return;
+    sendToPeer(activeRemoteTargetId, {
+      type: "input_keyboard",
+      keyEvent: { type: "up", vk: e.keyCode || e.which },
+    });
   };
 
   useEffect(() => {
@@ -885,7 +1446,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
   };
 
   const toggleFullscreen = () => {
-    const el = document.querySelector(".screen-wrap");
+    const el = document.querySelector(".screen-wrap") || document.querySelector(".streams-grid");
     if (!el) return;
     if (!document.fullscreenElement) {
       el.requestFullscreen().catch((err) => console.error(err));
@@ -906,43 +1467,45 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
     setTimeout(() => setCopied(false), 2500);
   };
 
-  const sharingParticipant = participants.find((p) => p.isSharing);
+  const sharingParticipantsCount = participants.filter((p) => p.isSharing).length;
 
   const handleAcceptPermission = useCallback(() => {
     if (!pendingRequest) return;
-    const conn = dataConnectionsRef.current.get(pendingRequest.peerId);
-    if (conn && conn.open) {
-      conn.send({
-        type: "remote_permission_response",
-        accepted: true,
-        subType: pendingRequest.type,
-      });
-    }
     if (pendingRequest.type === "mouse_keyboard") {
       setAllowRemoteInput(true);
     } else if (pendingRequest.type === "gamepad") {
       setAllowGamepadCoop(true);
+      if (window.electronAPI?.virtualGamepadConnect) {
+        const slot = getOrAssignGamepadSlot(pendingRequest.peerId);
+        if (!connectedVirtualGamepadsRef.current.has(slot)) {
+          window.electronAPI.virtualGamepadConnect(slot);
+          connectedVirtualGamepadsRef.current.add(slot);
+          setConnectedVirtualGamepadsCount(connectedVirtualGamepadsRef.current.size);
+        }
+      }
     }
+    sendToPeer(pendingRequest.peerId, {
+      type: "remote_permission_response",
+      accepted: true,
+      subType: pendingRequest.type,
+    });
     setPendingRequest(null);
-  }, [pendingRequest]);
+  }, [pendingRequest, sendToPeer, getOrAssignGamepadSlot]);
 
   const handleRejectPermission = useCallback(() => {
     if (!pendingRequest) return;
-    const conn = dataConnectionsRef.current.get(pendingRequest.peerId);
-    if (conn && conn.open) {
-      conn.send({
-        type: "remote_permission_response",
-        accepted: false,
-        subType: pendingRequest.type,
-      });
-    }
+    sendToPeer(pendingRequest.peerId, {
+      type: "remote_permission_response",
+      accepted: false,
+      subType: pendingRequest.type,
+    });
     setPendingRequest(null);
-  }, [pendingRequest]);
+  }, [pendingRequest, sendToPeer]);
 
   return (
     <div className="room-layout">
-      {/* Notificação flutuante para anfitrião aprovar/recusar controle */}
-      {isCreator && pendingRequest && (
+      {/* Notificação flutuante para aprovar/recusar controle no seu PC */}
+      {pendingRequest && (
         <div className="remote-request-toast animate-scale-in">
           <div className="remote-request-header">
             <GamepadIcon size={16} />
@@ -968,7 +1531,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
         </div>
       )}
 
-      {/* Toast de status para o espectador */}
+      {/* Toast de status de solicitação */}
       {requestStatusMsg && (
         <div className="remote-status-toast animate-scale-in">
           {requestStatusMsg}
@@ -983,10 +1546,12 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
           </div>
           <div className="room-name-row">
             <code className="room-name-code">{cleanRoomName}</code>
-            {sharingParticipant && (
+            {sharingParticipantsCount > 0 && (
               <span className="badge badge-live">
                 <span className="badge-dot" />
-                Transmitindo
+                {sharingParticipantsCount === 1
+                  ? "1 tela ao vivo"
+                  : `${sharingParticipantsCount} telas ao vivo`}
               </span>
             )}
             <span className="badge" title="Tempo de chamada">
@@ -995,6 +1560,18 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
           </div>
         </div>
         <div className="room-topbar-right">
+          {/* Alternador de modo Grade / Palco quando há 2+ transmissões */}
+          {allStreams.length > 1 && (
+            <button
+              className={`btn btn-sm ${isGridView ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setIsGridView((g) => !g)}
+              title="Alternar entre tela focada e grade lado a lado"
+              style={{ fontSize: "0.8rem" }}
+            >
+              {isGridView ? "⊡ Focar Tela" : `⊞ Lado a Lado (${allStreams.length})`}
+            </button>
+          )}
+
           {/* Menu de Controle Remoto / Gamepad Coop */}
           <div className="remote-menu-wrap" ref={remoteMenuRef}>
             <button
@@ -1010,7 +1587,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
             >
               <GamepadIcon size={14} />
               <span>Controle</span>
-              {isCreator && connectedVirtualGamepadsCount > 0 && (
+              {connectedVirtualGamepadsCount > 0 && (
                 <span
                   style={{
                     width: 7,
@@ -1034,63 +1611,16 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
                 <div className="remote-dropdown-header">
                   <span>🎮 Controle Remoto & Coop</span>
                   <span style={{ fontSize: "0.72rem", color: "var(--color-text-muted)" }}>
-                    {isCreator ? "Anfitrião" : "Espectador"}
+                    {displayName}
                   </span>
                 </div>
 
-                {isCreator ? (
+                {/* Se estiver assistindo a tela de outra pessoa, mostra opções para pedir acesso a ela */}
+                {activeRemoteTargetId && (
                   <>
-                    <div className="remote-option-card">
-                      <div className="remote-option-row">
-                        <span className="remote-option-title">
-                          <GamepadIcon size={14} /> Gamepad Coop (Xbox 360)
-                        </span>
-                        <button
-                          className={`remote-toggle-btn ${allowGamepadCoop ? "active" : "inactive"}`}
-                          onClick={() => setAllowGamepadCoop((v) => !v)}
-                        >
-                          {allowGamepadCoop ? "Ativado" : "Desativado"}
-                        </button>
-                      </div>
-                      <span className="remote-option-desc">
-                        Emulação de controle virtual de Xbox 360 no seu sistema para jogos cooperativos locais (Steam, emuladores, etc.).
-                        {connectedVirtualGamepadsCount > 0 && (
-                          <strong style={{ color: "#22c55e", display: "block", marginTop: 2 }}>
-                            ● Player 2 Conectado e Ativo
-                          </strong>
-                        )}
-                      </span>
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Controlar tela assistida ({remoteStreams[activeRemoteTargetId]?.name || "Participante"})
                     </div>
-
-                    <div className="remote-option-card">
-                      <div className="remote-option-row">
-                        <span className="remote-option-title">
-                          <MouseIcon size={13} /> Mouse & Teclado Remoto
-                        </span>
-                        <button
-                          className={`remote-toggle-btn ${allowRemoteInput ? "active" : "inactive"}`}
-                          onClick={() => setAllowRemoteInput((v) => !v)}
-                        >
-                          {allowRemoteInput ? "Ativado" : "Desativado"}
-                        </button>
-                      </div>
-                      <span className="remote-option-desc">
-                        Permite controle direto por mouse e teclado na sua área de trabalho e jogos.
-                      </span>
-                    </div>
-
-                    <div className="remote-help-box">
-                      <strong style={{ fontSize: "0.75rem", color: "#38bdf8", display: "block", marginBottom: 3 }}>
-                        Como funciona:
-                      </strong>
-                      <ol style={{ margin: 0, paddingLeft: 16, fontSize: "0.71rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
-                        <li>Quando um participante solicitar controle, você poderá aceitar na tela.</li>
-                        <li>Ao aceitar, o controle físico dele atuará diretamente como Player 2 no seu jogo.</li>
-                      </ol>
-                    </div>
-                  </>
-                ) : (
-                  <>
                     <div className="remote-option-card">
                       <div className="remote-option-row">
                         <span className="remote-option-title">
@@ -1100,16 +1630,12 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
                           className={`btn btn-xs ${isRemoteControlActive ? "btn-danger" : "btn-primary"}`}
                           onClick={() => {
                             if (!isRemoteControlActive) {
-                              if (viewerDataConnRef.current && viewerDataConnRef.current.open) {
-                                try {
-                                  viewerDataConnRef.current.send({
-                                    type: "request_remote_permission",
-                                    subType: "mouse_keyboard",
-                                    name: displayName,
-                                  });
-                                  setRequestStatusMsg("Solicitação enviada. Aguardando o anfitrião aceitar...");
-                                } catch {}
-                              }
+                              sendToPeer(activeRemoteTargetId, {
+                                type: "request_remote_permission",
+                                subType: "mouse_keyboard",
+                                name: displayName,
+                              });
+                              setRequestStatusMsg("Solicitação enviada. Aguardando aprovação...");
                             } else {
                               setIsRemoteControlActive(false);
                             }
@@ -1119,7 +1645,7 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
                         </button>
                       </div>
                       <span className="remote-option-desc">
-                        Controla mouse e teclado no PC do anfitrião após autorização. (Pressione ESC para sair).
+                        Controla mouse e teclado na tela assistida após autorização. (Pressione ESC para sair).
                       </span>
                     </div>
 
@@ -1136,16 +1662,12 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
                           <button
                             className="btn btn-xs btn-primary"
                             onClick={() => {
-                              if (viewerDataConnRef.current && viewerDataConnRef.current.open) {
-                                try {
-                                  viewerDataConnRef.current.send({
-                                    type: "request_remote_permission",
-                                    subType: "gamepad",
-                                    name: displayName,
-                                  });
-                                  setRequestStatusMsg("Solicitação de controle enviada. Aguardando o anfitrião aceitar...");
-                                } catch {}
-                              }
+                              sendToPeer(activeRemoteTargetId, {
+                                type: "request_remote_permission",
+                                subType: "gamepad",
+                                name: displayName,
+                              });
+                              setRequestStatusMsg("Solicitação de controle enviada. Aguardando aprovação...");
                             }}
                           >
                             Pedir Acesso
@@ -1153,22 +1675,103 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
                         )}
                       </div>
                       <span className="remote-option-desc">
-                        Conecte seu joystick USB/Bluetooth para emular um controle de Xbox 360 no jogo do anfitrião após autorização.
+                        Emula seu joystick USB/Bluetooth como controle de Xbox 360 no PC de quem está transmitindo.
                       </span>
                     </div>
 
-                    <div className="remote-help-box">
-                      <strong style={{ fontSize: "0.75rem", color: "#38bdf8", display: "block", marginBottom: 3 }}>
-                        Como funciona:
-                      </strong>
-                      <ol style={{ margin: 0, paddingLeft: 16, fontSize: "0.71rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
-                        <li>Conecte seu controle USB/Bluetooth ou use mouse/teclado.</li>
-                        <li>Clique em <strong>Pedir Acesso</strong> na opção desejada acima.</li>
-                        <li>Aguarde o anfitrião aceitar a solicitação na tela dele.</li>
-                      </ol>
-                    </div>
+                    <div className="remote-menu-divider" />
                   </>
                 )}
+
+                {/* Permissões locais para quando ESTE computador estiver compartilhando tela */}
+                <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--color-text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  No seu PC (quando você compartilha)
+                </div>
+
+                <div className="remote-option-card">
+                  <div className="remote-option-row">
+                    <span className="remote-option-title">
+                      <GamepadIcon size={14} /> Gamepad Coop (Xbox 360)
+                    </span>
+                    <button
+                      className={`remote-toggle-btn ${allowGamepadCoop ? "active" : "inactive"}`}
+                      onClick={() => {
+                        const next = !allowGamepadCoop;
+                        setAllowGamepadCoop(next);
+                        if (!next) {
+                          connectedVirtualGamepadsRef.current.forEach((pIdx) => {
+                            window.electronAPI?.virtualGamepadDisconnect?.(pIdx);
+                          });
+                          connectedVirtualGamepadsRef.current.clear();
+                          peerGamepadSlotsRef.current.clear();
+                          setConnectedVirtualGamepadsCount(0);
+                          participants.forEach((p) => {
+                            if (!p.isLocal) {
+                              sendToPeer(p.id, {
+                                type: "remote_permission_response",
+                                accepted: false,
+                                revoked: true,
+                                subType: "gamepad",
+                              });
+                            }
+                          });
+                        }
+                      }}
+                    >
+                      {allowGamepadCoop ? "Ativado" : "Desativado"}
+                    </button>
+                  </div>
+                  <span className="remote-option-desc">
+                    Emulação de controle virtual de Xbox 360 no seu sistema para jogos cooperativos locais.
+                    {connectedVirtualGamepadsCount > 0 && (
+                      <strong style={{ color: "#22c55e", display: "block", marginTop: 2 }}>
+                        ● Player 2 Conectado e Ativo
+                      </strong>
+                    )}
+                  </span>
+                </div>
+
+                <div className="remote-option-card">
+                  <div className="remote-option-row">
+                    <span className="remote-option-title">
+                      <MouseIcon size={13} /> Mouse & Teclado Remoto
+                    </span>
+                    <button
+                      className={`remote-toggle-btn ${allowRemoteInput ? "active" : "inactive"}`}
+                      onClick={() => {
+                        const next = !allowRemoteInput;
+                        setAllowRemoteInput(next);
+                        if (!next) {
+                          participants.forEach((p) => {
+                            if (!p.isLocal) {
+                              sendToPeer(p.id, {
+                                type: "remote_permission_response",
+                                accepted: false,
+                                revoked: true,
+                                subType: "mouse_keyboard",
+                              });
+                            }
+                          });
+                        }
+                      }}
+                    >
+                      {allowRemoteInput ? "Ativado" : "Desativado"}
+                    </button>
+                  </div>
+                  <span className="remote-option-desc">
+                    Permite controle direto por mouse e teclado na sua área de trabalho e jogos.
+                  </span>
+                </div>
+
+                <div className="remote-help-box">
+                  <strong style={{ fontSize: "0.75rem", color: "#38bdf8", display: "block", marginBottom: 3 }}>
+                    Como funciona:
+                  </strong>
+                  <ol style={{ margin: 0, paddingLeft: 16, fontSize: "0.71rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
+                    <li>Quando um participante solicitar controle, você poderá aceitar na tela.</li>
+                    <li>Ao aceitar, o controle físico dele atuará diretamente como Player 2 no seu jogo.</li>
+                  </ol>
+                </div>
 
                 <div className="remote-menu-divider" />
 
@@ -1232,137 +1835,161 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
             </div>
           )}
 
-          {isCreator ? (
-            isSharing && localStream ? (
-              <div className="screen-wrap">
-                <video ref={localVideoRef} autoPlay muted className="screen-video" />
-                <div className="screen-label">
-                  <MonitorIcon size={11} /> Sua tela (prévia)
-                  <button
-                    onClick={(e) => {
-                      const videoEl = (e.currentTarget.closest(".screen-wrap") as HTMLElement)?.querySelector("video");
-                      if (videoEl) {
-                        if (document.pictureInPictureElement) document.exitPictureInPicture();
-                        else videoEl.requestPictureInPicture().catch(console.error);
-                      }
-                    }}
-                    style={{
-                      marginLeft: 6,
-                      background: "rgba(255,255,255,0.15)",
-                      border: "none",
-                      borderRadius: 4,
-                      color: "#fff",
-                      cursor: "pointer",
-                      padding: "2px 6px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                    title="Tela Flutuante (Janelinha)"
-                  >
-                    <PiPIcon /> Janelinha
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="room-empty">
-                <div className="room-empty-icon animate-float">
-                  <MonitorIcon size={44} />
-                </div>
-                <h2 className="room-empty-title">Nenhuma tela compartilhada</h2>
-                <p className="room-empty-sub">
-                  Clique em <strong>Compartilhar Tela</strong> para iniciar a transmissão.
-                  <br />
-                  Seus amigos acessam pelo link ou direto pela lista do app.
-                </p>
-                <p style={{ marginTop: 8, fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
-                  {connectionStatus}
-                </p>
-              </div>
-            )
-          ) : remoteStream ? (
-            <div className="screen-wrap">
-              {isRemoteControlActive && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 12,
-                    left: "50%",
-                    transform: "translateX(-50%)",
-                    zIndex: 20,
-                    background: "rgba(16, 185, 129, 0.9)",
-                    color: "#000",
-                    fontWeight: 700,
-                    fontSize: "0.78rem",
-                    padding: "4px 14px",
-                    borderRadius: 20,
-                    boxShadow: "0 2px 10px rgba(0,0,0,0.5)",
-                    pointerEvents: "none",
-                  }}
-                >
-                  🎮 Modo Jogo Ativo · Clique no vídeo para jogar · ESC para sair
-                </div>
-              )}
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                className="screen-video"
-                tabIndex={0}
-                style={{
-                  cursor: isRemoteControlActive ? "crosshair" : "default",
-                  outline: isRemoteControlActive ? "2px solid var(--color-primary)" : "none",
-                }}
-                onMouseMove={handleVideoMouseMove}
-                onMouseDown={handleVideoMouseDown}
-                onMouseUp={handleVideoMouseUp}
-                onWheel={handleVideoWheel}
-                onContextMenu={(e) => {
-                  if (isRemoteControlActive) e.preventDefault();
-                }}
-                onKeyDown={handleVideoKeyDown}
-                onKeyUp={handleVideoKeyUp}
-              />
-              <div className="screen-label">
-                <MonitorIcon size={11} /> Tela do Anfitrião
-                <button
-                  onClick={(e) => {
-                    const videoEl = (e.currentTarget.closest(".screen-wrap") as HTMLElement)?.querySelector("video");
-                    if (videoEl) {
-                      if (document.pictureInPictureElement) document.exitPictureInPicture();
-                      else videoEl.requestPictureInPicture().catch(console.error);
-                    }
-                  }}
-                  style={{
-                    marginLeft: 6,
-                    background: "rgba(255,255,255,0.15)",
-                    border: "none",
-                    borderRadius: 4,
-                    color: "#fff",
-                    cursor: "pointer",
-                    padding: "2px 6px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                  }}
-                  title="Tela Flutuante (Janelinha)"
-                >
-                  <PiPIcon /> Janelinha
-                </button>
-              </div>
-            </div>
-          ) : (
+          {allStreams.length === 0 ? (
             <div className="room-empty">
               <div className="room-empty-icon animate-float">
                 <MonitorIcon size={44} />
               </div>
-              <h2 className="room-empty-title">Aguardando transmissão</h2>
+              <h2 className="room-empty-title">Nenhuma tela compartilhada</h2>
               <p className="room-empty-sub">
-                O anfitrião ainda não iniciou o compartilhamento de tela ou a conexão está sendo estabelecida.
+                Qualquer pessoa na sala pode clicar em <strong>Compartilhar Tela</strong> abaixo para transmitir.
+                <br />
+                Quando mais de alguém compartilhar, você poderá alternar entre as telas ou assistir todas lado a lado!
               </p>
               <p style={{ marginTop: 8, fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
                 {connectionStatus}
               </p>
             </div>
+          ) : isGridView && allStreams.length > 1 ? (
+            /* Modo Grade Lado a Lado (estilo Discord) */
+            <div className="streams-grid">
+              {allStreams.map((item) => (
+                <div
+                  key={item.id}
+                  className="screen-wrap stream-grid-tile"
+                  onDoubleClick={() => {
+                    setSelectedStreamId(item.id);
+                    setIsGridView(false);
+                  }}
+                >
+                  <StreamVideo
+                    stream={item.stream}
+                    muted={item.isLocal}
+                    volume={volume}
+                    className="screen-video"
+                  />
+                  <div className="screen-label">
+                    <MonitorIcon size={11} /> {item.name}
+                    <button
+                      onClick={() => {
+                        setSelectedStreamId(item.id);
+                        setIsGridView(false);
+                      }}
+                      className="stream-action-pill"
+                      title="Expandir esta tela"
+                    >
+                      Focar
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        const videoEl = (e.currentTarget.closest(".screen-wrap") as HTMLElement)?.querySelector("video");
+                        if (videoEl) {
+                          if (document.pictureInPictureElement) document.exitPictureInPicture();
+                          else videoEl.requestPictureInPicture().catch(console.error);
+                        }
+                      }}
+                      className="stream-action-pill"
+                      title="Tela Flutuante (Janelinha)"
+                    >
+                      <PiPIcon /> Janelinha
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            /* Modo Palco Principal + Barra de Miniaturas (estilo Discord) */
+            <>
+              {focusedStream && (
+                <div className="screen-wrap">
+                  {!focusedStream.isLocal && isRemoteControlActive && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 12,
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        zIndex: 20,
+                        background: "rgba(16, 185, 129, 0.9)",
+                        color: "#000",
+                        fontWeight: 700,
+                        fontSize: "0.78rem",
+                        padding: "4px 14px",
+                        borderRadius: 20,
+                        boxShadow: "0 2px 10px rgba(0,0,0,0.5)",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      🎮 Modo Jogo Ativo · Clique no vídeo para jogar · ESC para sair
+                    </div>
+                  )}
+                  <StreamVideo
+                    stream={focusedStream.stream}
+                    muted={focusedStream.isLocal}
+                    volume={volume}
+                    className="screen-video"
+                    isRemoteControlActive={!focusedStream.isLocal && isRemoteControlActive}
+                    videoRefCallback={(el) => {
+                      if (!focusedStream.isLocal) {
+                        remoteVideoRef.current = el;
+                      }
+                    }}
+                    onMouseMove={!focusedStream.isLocal ? handleVideoMouseMove : undefined}
+                    onMouseDown={!focusedStream.isLocal ? handleVideoMouseDown : undefined}
+                    onMouseUp={!focusedStream.isLocal ? handleVideoMouseUp : undefined}
+                    onWheel={!focusedStream.isLocal ? handleVideoWheel : undefined}
+                    onKeyDown={!focusedStream.isLocal ? handleVideoKeyDown : undefined}
+                    onKeyUp={!focusedStream.isLocal ? handleVideoKeyUp : undefined}
+                  />
+                  <div className="screen-label">
+                    <MonitorIcon size={11} /> {focusedStream.name}
+                    <button
+                      onClick={(e) => {
+                        const videoEl = (e.currentTarget.closest(".screen-wrap") as HTMLElement)?.querySelector("video");
+                        if (videoEl) {
+                          if (document.pictureInPictureElement) document.exitPictureInPicture();
+                          else videoEl.requestPictureInPicture().catch(console.error);
+                        }
+                      }}
+                      className="stream-action-pill"
+                      title="Tela Flutuante (Janelinha)"
+                    >
+                      <PiPIcon /> Janelinha
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Barra inferior de miniaturas quando há múltiplas telas sendo compartilhadas */}
+              {allStreams.length > 1 && (
+                <div className="stream-strip">
+                  {allStreams.map((item) => {
+                    const isActive = focusedStream?.id === item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        className={`stream-thumb ${isActive ? "stream-thumb--active" : ""}`}
+                        onClick={() => setSelectedStreamId(item.id)}
+                        title={`Clique para focar na tela de ${item.name}`}
+                      >
+                        <StreamVideo
+                          stream={item.stream}
+                          muted={true}
+                          volume={0}
+                          className="stream-thumb-video"
+                        />
+                        <div className="stream-thumb-bar">
+                          <span className="stream-thumb-name">{item.name}</span>
+                          <span className="stream-thumb-badge">
+                            {item.isLocal ? "VOCÊ" : "AO VIVO"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1376,58 +2003,70 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
               </button>
             </div>
             <ul className="participant-list">
-              {participants.map((p) => (
-                <li key={p.id} className="participant-item">
-                  <div className="participant-avatar">{(p.name || "?")[0].toUpperCase()}</div>
-                  <div className="participant-info">
-                    <span className="participant-name">
-                      {p.name}
-                      {p.isLocal ? " (você)" : ""}
-                    </span>
-                    {p.isSharing && <span className="participant-sharing">Transmitindo</span>}
-                  </div>
-                </li>
-              ))}
+              {participants.map((p) => {
+                const hasStream = p.isLocal ? isSharing : Boolean(remoteStreams[p.id]);
+                return (
+                  <li
+                    key={p.id}
+                    className="participant-item"
+                    style={{ cursor: hasStream ? "pointer" : "default" }}
+                    onClick={() => {
+                      if (hasStream) {
+                        setSelectedStreamId(p.isLocal ? "local" : p.id);
+                        setIsGridView(false);
+                      }
+                    }}
+                    title={hasStream ? `Assistir tela de ${p.name}` : undefined}
+                  >
+                    <div className="participant-avatar">{(p.name || "?")[0].toUpperCase()}</div>
+                    <div className="participant-info">
+                      <span className="participant-name">
+                        {p.name}
+                        {p.isLocal ? " (você)" : ""}
+                      </span>
+                      {p.isSharing && <span className="participant-sharing">● Transmitindo (ver)</span>}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </aside>
         )}
       </div>
 
-      {/* Controls */}
+      {/* Controls - Disponíveis para TODOS os participantes da sala */}
       <footer className="room-controls">
         {/* Quality */}
-        {isCreator && (
-          <div className="quality-wrap" ref={qualityRef}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowQuality((o) => !o)}
-              disabled={isSharing}
-              title={isSharing ? "Pare para mudar a qualidade" : "Qualidade da transmissão"}
-            >
-              <QualityIcon /> {QUALITY_LABELS[quality]}
-            </button>
-            {showQuality && (
-              <div className="quality-menu animate-scale-in">
-                {(Object.keys(QUALITY_LABELS) as Quality[]).map((q) => (
-                  <button
-                    key={q}
-                    className={`quality-option ${quality === q ? "quality-option--active" : ""}`}
-                    onClick={() => {
-                      setQuality(q);
-                      setShowQuality(false);
-                    }}
-                  >
-                    {quality === q && <CheckIcon />}
-                    {QUALITY_LABELS[q]}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <div className="quality-wrap" ref={qualityRef}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setShowQuality((o) => !o)}
+            disabled={isSharing}
+            title={isSharing ? "Pare para mudar a qualidade" : "Qualidade da sua transmissão"}
+          >
+            <QualityIcon /> {QUALITY_LABELS[quality]}
+          </button>
+          {showQuality && (
+            <div className="quality-menu animate-scale-in">
+              {(Object.keys(QUALITY_LABELS) as Quality[]).map((q) => (
+                <button
+                  key={q}
+                  className={`quality-option ${quality === q ? "quality-option--active" : ""}`}
+                  onClick={() => {
+                    setQuality(q);
+                    setShowQuality(false);
+                  }}
+                >
+                  {quality === q && <CheckIcon />}
+                  {QUALITY_LABELS[q]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Botão rápido: Eco Suprimido vs Eco Ignorado */}
-        {isCreator && window.electronAPI && (
+        {window.electronAPI && (
           <button
             className={`btn btn-sm ${audioMode === "exclude-discord" ? "btn-secondary" : "btn-warning"}`}
             onClick={handleToggleDiscordAudio}
@@ -1451,17 +2090,16 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
           </button>
         )}
 
-        {/* Share button */}
-        {isCreator &&
-          (isSharing ? (
-            <button className="btn btn-danger" onClick={handleStopShare}>
-              <StopShareIcon /> Parar Transmissão
-            </button>
-          ) : (
-            <button className="btn btn-primary" onClick={handleStartShare}>
-              <MonitorIcon size={17} /> Compartilhar Tela
-            </button>
-          ))}
+        {/* Share button - Disponível para TODOS na sala */}
+        {isSharing ? (
+          <button className="btn btn-danger" onClick={handleStopShare}>
+            <StopShareIcon /> Parar Transmissão
+          </button>
+        ) : (
+          <button className="btn btn-primary" onClick={handleStartShare}>
+            <MonitorIcon size={17} /> Compartilhar Tela
+          </button>
+        )}
 
         <button
           className={`btn ${isCameraEnabled ? "btn-secondary" : "btn-ghost"} btn-icon`}
@@ -1488,10 +2126,9 @@ export default function RoomView({ roomName, displayName, password, isCreator, o
             onChange={(e) => {
               const v = parseFloat(e.target.value);
               setVolume(v);
-              if (remoteVideoRef.current) remoteVideoRef.current.volume = v;
             }}
             className="volume-slider"
-            title="Volume"
+            title="Volume das transmissões"
           />
         </div>
 
@@ -1808,6 +2445,99 @@ const roomStyles = `
     color: #fff; font-size: 0.78rem; font-weight: 600;
     padding: 4px 12px; border-radius: var(--radius-full);
     border: 1px solid rgba(255,255,255,0.1);
+  }
+  .stream-action-pill {
+    margin-left: 6px;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    padding: 2px 7px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    transition: background 0.15s;
+  }
+  .stream-action-pill:hover {
+    background: rgba(255,255,255,0.28);
+  }
+  .streams-grid {
+    width: 100%; flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 12px;
+  }
+  .stream-grid-tile {
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: border-color 0.2s;
+  }
+  .stream-grid-tile:hover {
+    border-color: var(--color-accent);
+  }
+  .stream-strip {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 4px 0 0;
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .stream-thumb {
+    position: relative;
+    width: 165px;
+    height: 94px;
+    border-radius: var(--radius-md, 10px);
+    overflow: hidden;
+    background: #08090e;
+    border: 2px solid rgba(255,255,255,0.12);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.18s ease;
+  }
+  .stream-thumb:hover {
+    border-color: rgba(255,255,255,0.35);
+    transform: translateY(-2px);
+  }
+  .stream-thumb--active {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 14px rgba(0, 212, 184, 0.35);
+  }
+  .stream-thumb-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .stream-thumb-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 3px 7px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.88));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .stream-thumb-name {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stream-thumb-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-accent);
+    color: #090d16;
+    flex-shrink: 0;
   }
   .room-empty {
     display: flex; flex-direction: column;
